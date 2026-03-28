@@ -9,6 +9,7 @@ import {
   Inbox,
   Star,
   SendHorizontal,
+  FileEdit,
   MoreVertical,
   Plus,
   Tag,
@@ -18,6 +19,7 @@ const DEFAULT_FOLDERS = [
   { id: 'inbox', icon: Inbox, label: 'Inbox' },
   { id: 'starred', icon: Star, label: 'Starred' },
   { id: 'sent', icon: SendHorizontal, label: 'Sent' },
+  { id: 'drafts', icon: FileEdit, label: 'Drafts' },
 ]
 
 const Sidebar = ({
@@ -30,6 +32,7 @@ const Sidebar = ({
   emailMeta,
   uids,
   sentCount = 0,
+  draftsCount = 0,
   onCompose,
 }) => {
   const inboxUnread = uids.filter((uid) => emailMeta[uid]?.unread !== false).length
@@ -39,6 +42,7 @@ const Sidebar = ({
     if (id === 'inbox') return inboxUnread
     if (id === 'starred') return starredCount
     if (id === 'sent') return sentCount
+    if (id === 'drafts') return draftsCount
     return 0
   }
 

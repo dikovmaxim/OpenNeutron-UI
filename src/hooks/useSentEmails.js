@@ -53,9 +53,10 @@ export function useSentEmails(setPreviews) {
               date:        parsed?.date        ?? (received_at ? new Date(received_at) : null),
               preview:     parsed?.preview     ?? '',
               attachments: parsed?.attachments ?? [],
+              e2ee:        parsed?.e2ee        ?? false,
             }
           } catch {
-            newPreviews[uid] = { subject: '(decryption failed)', from: null, date: null, preview: '', attachments: [] }
+            newPreviews[uid] = { subject: '(encrypted)', from: null, date: received_at ? new Date(received_at) : null, preview: '', attachments: [], decryptFailed: true }
           }
         }),
       )

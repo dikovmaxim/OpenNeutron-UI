@@ -1,6 +1,7 @@
-import { Search } from 'lucide-react'
+import { Search, ShieldCheck, KeyRound } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
-export function TopBar({ searchQuery, onSearchChange, userEmail, serverStatus, onLogout, onRetryServer }) {
+export function TopBar({ searchQuery, onSearchChange, userEmail, isAdmin, serverStatus, onLogout, onRetryServer, onChangePassword }) {
   return (
     <>
       <div className="h-12 flex items-center justify-between px-2 border-b border-border bg-background flex-shrink-0">
@@ -18,6 +19,26 @@ export function TopBar({ searchQuery, onSearchChange, userEmail, serverStatus, o
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-foreground/60">{userEmail}</span>
+          {isAdmin && (
+            <Link
+              to="/admin"
+              className="flex items-center gap-1.5 text-sm text-foreground/60 hover:text-foreground transition-colors"
+              title="Admin panel"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              Admin
+            </Link>
+          )}
+          {isAdmin && (
+            <button
+              onClick={onChangePassword}
+              className="flex items-center gap-1.5 text-sm text-foreground/60 hover:text-foreground transition-colors"
+              title="Change password"
+            >
+              <KeyRound className="w-4 h-4" />
+              Password
+            </button>
+          )}
           <button
             onClick={onLogout}
             className="text-sm text-foreground/60 hover:text-foreground"

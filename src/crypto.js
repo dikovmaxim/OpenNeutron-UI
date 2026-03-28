@@ -121,24 +121,32 @@ export async function exportPublicKeyFromPrivate(privateKey) {
 const LEN_PREFIX_SIZE = 4
 
 export async function decryptEmail(base64Data, privateKey) {
-  try {
-    const buf = new Uint8Array(fromB64(base64Data))
+  const buf = new Uint8Array(fromB64(base64Data))
 
-    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
-    const rsaLen = view.getUint32(0, false)
-
-    let off = LEN_PREFIX_SIZE
-    const rsaCipher = buf.slice(off, off + rsaLen);  off += rsaLen
-    const iv        = buf.slice(off, off + 12);       off += 12
-    const aesCipher = buf.slice(off)
-
-    const aesRaw = await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, privateKey, rsaCipher)
-    const aesKey = await crypto.subtle.importKey('raw', aesRaw, { name: 'AES-GCM' }, false, ['decrypt'])
-    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, aesCipher)
-    return new TextDecoder().decode(plain)
-  } catch {
-    return new TextDecoder().decode(fromB64(base64Data))
+  // Heuristic: if the data is valid UTF-8 text (no encrypted prefix structure),
+  // it was never encrypted — return as-is.
+  if (buf.length < LEN_PREFIX_SIZE + 4) {
+    return new TextDecoder().decode(buf)
   }
+
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+  const rsaLen = view.getUint32(0, false)
+
+  // If rsaLen looks unreasonable it's probably plain text
+  if (rsaLen === 0 || rsaLen > buf.length - LEN_PREFIX_SIZE) {
+    return new TextDecoder().decode(buf)
+  }
+
+  let off = LEN_PREFIX_SIZE
+  const rsaCipher = buf.slice(off, off + rsaLen);  off += rsaLen
+  const iv        = buf.slice(off, off + 12);       off += 12
+  const aesCipher = buf.slice(off)
+
+  // This will throw if the key is wrong or data is corrupted — callers must handle it
+  const aesRaw = await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, privateKey, rsaCipher)
+  const aesKey = await crypto.subtle.importKey('raw', aesRaw, { name: 'AES-GCM' }, false, ['decrypt'])
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, aesCipher)
+  return new TextDecoder().decode(plain)
 }
 
 export async function encryptEmail(plaintext, publicKey) {

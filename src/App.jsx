@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom'
 import Login from './components/Login'
 import AuthorizedLayout from './components/AuthorizedLayout'
+import AdminPanel from './components/AdminPanel'
 import ProtectedRoute from './components/ProtectedRoute'
 
 function App() {
@@ -13,6 +14,14 @@ function App() {
         element={
           <ProtectedRoute>
             <AuthorizedLayout />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute>
+            <AdminPanel />
           </ProtectedRoute>
         }
       />

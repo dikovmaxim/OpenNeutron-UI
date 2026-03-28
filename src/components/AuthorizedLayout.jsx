@@ -5,6 +5,7 @@ import EmailView from '@/components/EmailView'
 import ComposeWindow from '@/components/ComposeWindow'
 import { ConfirmModal, InputModal } from '@/components/ui/Modal'
 import { TopBar } from '@/components/TopBar'
+import { ChangePasswordModal } from '@/components/ChangePasswordModal'
 import { EmailToolbar } from '@/components/EmailToolbar'
 import { useEmailFetch } from '@/hooks/useEmailFetch'
 import { useSentEmails } from '@/hooks/useSentEmails'
@@ -29,7 +30,11 @@ const AuthorizedLayout = () => {
   const [modalState, setModalState] = useState({ type: null })
   const [composeOpen, setComposeOpen] = useState(false)
   const [replyData, setReplyData] = useState(null)
+  const [composeDraftId, setComposeDraftId] = useState(null)
+  const [drafts, setDrafts] = useState(() => storage.getDrafts())
   const [userEmail, setUserEmail] = useState('')
+  const [isAdmin, setIsAdmin] = useState(() => storage.getIsAdmin())
+  const [showChangePassword, setShowChangePassword] = useState(false)
   const [serverStatus, setServerStatus] = useState('checking')
 
   const { uids, setUids, previews, setPreviews, loading, hasMore, fetchEmails, loadMore } = useEmailFetch()
@@ -44,16 +49,15 @@ const AuthorizedLayout = () => {
       const token = storage.getToken()
       const res = await api.get('/user/me', { headers: { Authorization: `Bearer ${token}` } })
       const user = res.data
-      if (user) setUserEmail(user.email ?? user.username ?? '')
-      setServerStatus('ok')
-    } catch (err) {
-      if (err?.response?.status === 401) {
-        keySession.clear()
-        storage.clear()
-        window.location.reload()
-      } else {
-        setServerStatus('unreachable')
+      if (user) {
+        setUserEmail(user.email ?? user.username ?? '')
+        const admin = user.is_admin ?? false
+        setIsAdmin(admin)
+        storage.set({ is_admin: admin })
       }
+      setServerStatus('ok')
+    } catch {
+      setServerStatus('unreachable')
     }
   }, [])
 
@@ -81,12 +85,30 @@ const AuthorizedLayout = () => {
     if (selectedFolder === 'inbox') return uids
     if (selectedFolder === 'starred') return uids.filter((uid) => emailMeta[uid]?.starred)
     if (selectedFolder === 'sent') return sentUids
+    if (selectedFolder === 'drafts') return drafts.map((d) => d.id)
     const group = groups.find((g) => g.uid === selectedFolder)
     if (group) return group.email_uids.filter((uid) => uids.includes(uid) || sentUids.includes(uid))
     return uids
   })()
 
+  const draftPreviews = useMemo(() => {
+    const map = {}
+    for (const d of drafts) {
+      map[d.id] = {
+        subject:  d.subject || '(no subject)',
+        from:     { email: '', name: d.to?.[0] ? `To: ${d.to[0]}` : '(no recipients)' },
+        date:     d.updatedAt ? new Date(d.updatedAt) : null,
+        preview:  d.body?.slice(0, 100) ?? '',
+        isDraft:  true,
+      }
+    }
+    return map
+  }, [drafts])
+
+  const allPreviews = selectedFolder === 'drafts' ? draftPreviews : previews
+
   const filteredUids = useMemo(() => {
+    if (selectedFolder === 'drafts') return visibleUids
     let result = visibleUids
     if (filterMode === 'unread') result = result.filter((uid) => emailMeta[uid]?.unread !== false)
     else if (filterMode === 'read') result = result.filter((uid) => emailMeta[uid]?.unread === false)
@@ -103,7 +125,7 @@ const AuthorizedLayout = () => {
       })
     }
     return result
-  }, [visibleUids, filterMode, searchQuery, emailMeta, previews])
+  }, [visibleUids, filterMode, searchQuery, emailMeta, previews, selectedFolder])
 
   const totalFiltered = filteredUids.length
   const pageCount = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE))
@@ -127,10 +149,20 @@ const AuthorizedLayout = () => {
     if (selectedFolder === 'inbox') return 'Inbox'
     if (selectedFolder === 'starred') return 'Starred'
     if (selectedFolder === 'sent') return 'Sent'
+    if (selectedFolder === 'drafts') return 'Drafts'
     return groups.find((g) => g.uid === selectedFolder)?.title ?? 'Inbox'
   })()
 
   const handleSelect = (uid) => {
+    if (String(uid).startsWith('draft_')) {
+      const draft = drafts.find((d) => d.id === uid)
+      if (draft) {
+        setReplyData({ to: draft.to ?? [], cc: draft.cc ?? [], bcc: draft.bcc ?? [], subject: draft.subject ?? '', body: draft.body ?? '' })
+        setComposeDraftId(draft.id)
+        setComposeOpen(true)
+      }
+      return
+    }
     setSelectedUid(uid)
     markRead(uid)
   }
@@ -201,9 +233,25 @@ const AuthorizedLayout = () => {
     fetchSentPreviews([uid])
   }, [fetchSentPreviews])
 
-  const handleComposeClose = useCallback(() => {
+  const handleComposeClose = useCallback((savedDraft) => {
+    if (savedDraft) {
+      storage.saveDraft(savedDraft)
+      setDrafts(storage.getDrafts())
+    }
     setComposeOpen(false)
     setReplyData(null)
+    setComposeDraftId(null)
+  }, [])
+
+  const handleDeleteDraft = useCallback((draftId) => {
+    storage.deleteDraft(draftId)
+    setDrafts(storage.getDrafts())
+  }, [])
+
+  const handleComposeTo = useCallback((emailAddr) => {
+    setReplyData({ to: [emailAddr], subject: '', body: '' })
+    setComposeDraftId(null)
+    setComposeOpen(true)
   }, [])
 
   const handleReply = useCallback((email) => {
@@ -234,6 +282,7 @@ const AuthorizedLayout = () => {
             emailMeta={emailMeta}
             uids={uids}
             sentCount={sentUids.length}
+            draftsCount={drafts.length}
             onCompose={() => setComposeOpen(true)}
           />
         </div>
@@ -242,12 +291,15 @@ const AuthorizedLayout = () => {
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
             userEmail={userEmail}
+            isAdmin={isAdmin}
             serverStatus={serverStatus}
             onLogout={handleLogout}
             onRetryServer={checkServer}
+            onChangePassword={() => setShowChangePassword(true)}
           />
           <div className="flex-1 flex min-h-0">
             <div className="w-[680px] shrink-0 border-l border-r border-border flex flex-col overflow-hidden">
+              {selectedFolder !== 'drafts' && (
               <EmailToolbar
                 pagedUids={pagedUids}
                 checkedUids={checkedUids}
@@ -270,9 +322,10 @@ const AuthorizedLayout = () => {
                   if (next >= pageCount - 1 && hasMore) loadMore()
                 }}
               />
+              )}
               <EmailList
                 uids={pagedUids}
-                previews={previews}
+                previews={allPreviews}
                 emailMeta={emailMeta}
                 selectedUid={selectedUid}
                 checkedUids={checkedUids}
@@ -285,7 +338,10 @@ const AuthorizedLayout = () => {
                 onMarkRead={markRead}
                 onMarkUnread={markUnread}
                 onToggleStar={toggleStar}
-                onDeleteEmail={(uid) => setModalState({ type: 'delete-email', uid })}
+                onDeleteEmail={(uid) => {
+                  if (String(uid).startsWith('draft_')) { handleDeleteDraft(uid) }
+                  else setModalState({ type: 'delete-email', uid })
+                }}
                 onMoveToGroup={moveToGroup}
                 onRemoveFromGroup={handleRemoveFromGroup}
                 groups={groups}
@@ -310,6 +366,7 @@ const AuthorizedLayout = () => {
                 groups={groups}
                 selectedFolder={selectedFolder}
                 onReply={handleReply}
+                onComposeTo={handleComposeTo}
               />
             </div>
           </div>
@@ -363,8 +420,15 @@ const AuthorizedLayout = () => {
           onClose={handleComposeClose}
           onSent={handleSent}
           replyData={replyData}
+          draftId={composeDraftId}
+          onDeleteDraft={handleDeleteDraft}
         />
       )}
+
+      <ChangePasswordModal
+        isOpen={showChangePassword}
+        onClose={() => setShowChangePassword(false)}
+      />
     </div>
   )
 }

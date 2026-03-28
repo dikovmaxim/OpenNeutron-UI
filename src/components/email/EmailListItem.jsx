@@ -10,7 +10,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuPortal,
 } from '@/components/ui/dropdown-menu'
-import { Star, Folder, MailOpen, Mail, Trash2, MoreHorizontal, Check, Paperclip } from 'lucide-react'
+import { Star, Folder, MailOpen, Mail, Trash2, MoreHorizontal, Check, Paperclip, Lock, LockKeyhole } from 'lucide-react'
 import { formatEmailDate } from '@/emailParser'
 import { SenderAvatar } from '@/components/SenderAvatar'
 
@@ -54,6 +54,60 @@ export function EmailListItem({
   const isInGroup = selectedFolder && selectedFolder !== 'inbox' && selectedFolder !== 'starred'
   const [menuOpen, setMenuOpen] = useState(false)
 
+  if (preview.decryptFailed) {
+    return (
+      <div
+        role="button"
+        onClick={() => onSelect(uid)}
+        className={`flex items-start gap-3 p-3 cursor-pointer border-b border-l-2 transition-colors group/item ${
+          isSelected
+            ? 'bg-amber-950/40 border-l-amber-500 border-b-amber-900/40'
+            : 'border-l-amber-600/50 border-b-border hover:bg-amber-950/20'
+        }`}
+      >
+        <div
+          onClick={(e) => { e.stopPropagation(); onCheck(uid) }}
+          className={`shrink-0 mt-0.5 w-4 h-4 rounded border-2 flex items-center justify-center cursor-pointer transition-all ${
+            isChecked ? 'bg-primary border-primary opacity-100' : 'border-foreground/25 hover:border-foreground/50 opacity-0 group-hover/item:opacity-100'
+          }`}
+        >
+          {isChecked && <Check className="w-2.5 h-2.5 text-primary-foreground" />}
+        </div>
+        <div className={`w-8 h-8 rounded-md shrink-0 flex items-center justify-center ${
+          isSelected ? 'bg-amber-500/20' : 'bg-amber-900/20'
+        }`}>
+          <LockKeyhole className="w-4 h-4 text-amber-500/70" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-0.5 gap-2">
+            <span className={`font-medium text-sm truncate ${
+              isSelected ? 'text-amber-200' : 'text-amber-500/80'
+            }`}>
+              Encrypted message
+            </span>
+            <span className={`text-xs whitespace-nowrap ${
+              isSelected ? 'text-amber-200/60' : 'text-foreground/40'
+            }`}>
+              {preview.date ? formatEmailDate(preview.date) : ''}
+            </span>
+          </div>
+          <p className={`text-xs ${
+            isSelected ? 'text-amber-200/60' : 'text-amber-600/70'
+          }`}>
+            Cannot be decrypted with the current key
+          </p>
+        </div>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDeleteEmail(uid) }}
+          className="shrink-0 p-1 rounded text-foreground/30 hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover/item:opacity-100"
+          title="Delete"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div
       role="button"
@@ -88,6 +142,12 @@ export function EmailListItem({
             >
               {senderLabel}
             </span>
+            {preview.e2ee && (
+              <Lock
+                className={`w-3 h-3 shrink-0 ${isSelected ? 'text-primary-foreground/70' : 'text-primary/70'}`}
+                title="End-to-end encrypted"
+              />
+            )}
             {isUnread && !isSelected && (
               <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
             )}

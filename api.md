@@ -161,6 +161,45 @@ Creates a new user account with no password. The user must set their own passwor
 }
 ```
 
+#### POST /admin/users/credentials
+Overwrite a user's password, public key, or both. Omit either field to leave it unchanged. At least one field must be provided.
+
+**Request**: `AdminSetCredentialsRequest`
+```json
+{
+  "username": "string",
+  "password": "sha256-hash-string",
+  "public_key": "base64-string"
+}
+```
+> Both `password` and `public_key` are optional, but at least one must be present.
+
+**Response**: `MessageResponse`
+```json
+{
+  "message": "Credentials updated"
+}
+```
+
+#### POST /admin/users/admin
+Grant or revoke admin privileges for a user.
+
+**Request**: `AdminSetAdminRequest`
+```json
+{
+  "username": "string",
+  "is_admin": true
+}
+```
+> Set `is_admin` to `false` to demote an admin back to a regular user.
+
+**Response**: `MessageResponse`
+```json
+{
+  "message": "Admin status updated"
+}
+```
+
 #### GET /admin/disk-usage
 **Request**: None
 **Response**: `AdminDiskUsageResponse`
@@ -349,10 +388,13 @@ All endpoints that return email data (`/email/get`, `/email/bulk`) now include a
 {
   "uid": 12345678901234567890,
   "data": "base64-encoded-email-bytes",
-  "received_at": "2026-03-27T14:05:00Z"
+  "received_at": "2026-03-27T14:05:00Z",
+  "e2ee": true
 }
 ```
 
+> **`e2ee`**: `true` when the blob was client-side encrypted (stored as-is via `OPNTRN E2EE` or via the sender's `e2ee: true` flag). `false` when the server applied its own at-rest encryption. The client uses this to decide the decryption strategy: E2EE emails are decrypted with the user's private key using the `openneutron-1` scheme; non-E2EE emails are decrypted with the server-side key.
+>
 > Emails also carry a `starred` boolean flag (set via `POST /email/star`). The flag is **not** included in `EmailBytesResponse` — it is a server-side metadata flag only. To star or unstar an email, use `POST /email/star`.
 
 ---
@@ -481,31 +523,63 @@ Manually remove an email UID from a group. The email blob is **not** deleted.
 
 ### Encrypted Sending Flow
 
-The encrypted sending flow is a two-step process that allows clients to send end-to-end encrypted (or plain) emails while keeping a sender-side copy and individually delivering to each recipient.
+The encrypted sending flow is a two-step process that allows clients to send end-to-end encrypted email while keeping a sender-side copy and individually delivering to each recipient. Full protocol details are in [e2ee_spec.md](e2ee_spec.md).
 
 #### Overview
 
-1. **Resolve keys** — The client sends a list of recipient email addresses. The server returns the public key (if any) for each address that belongs to a local user. External addresses get `null` keys. The `type` field is `"none"` for now (reserved for future negotiated E2EE modes).
+1. **Resolve keys** — The client sends a list of recipient email addresses. The server returns the public key for each address. For local users the key is read from the user record. For external addresses the server connects to the recipient domain's MX server using SMTP and queries the key via the `OPNTRN GETKEY` extension command inside a TLS session. If the remote server does not support OPNTRN, the key is returned as `null`.
 
-2. **Send encrypted** — The client prepares:
-   - A **local copy** (the sender's own encrypted copy of the email, stored in `sentEmailIds`).
-   - A **recipients map** — for each recipient address, the already-encrypted (or plaintext) email bytes. Local recipients are delivered directly; external recipients are DKIM-signed (if a signing key is configured) and sent via SMTP to the recipient's MX server.
+2. **Encrypt** — The client encrypts the email separately for each recipient using that recipient's public key (see *Encryption Scheme* below). Recipients with no key receive unencrypted bytes or are excluded — this is a client decision.
+
+3. **Send** — The client calls `POST /email/sendencrypted`. Each recipient entry carries its own `e2ee` flag. The server stores the sender's local copy and delivers each recipient's payload individually:
+   - For recipients with `e2ee: true`, the server sends `OPNTRN E2EE` before `MAIL FROM` to OPNTRN-capable receiving servers, signalling them to store the payload without re-encrypting it.
+   - For recipients with `e2ee: false`, the payload is delivered as a normal SMTP message (no `OPNTRN E2EE` is sent).
+   - This allows mixed-mode sending in a single API call: some recipients get E2EE delivery, others get plaintext.
+
+#### Encryption Scheme (`openneutron-1`)
+
+Keys returned with `key_type: "openneutron-1"` require a hybrid RSA-OAEP + AES-256-GCM scheme. The client must produce blobs in this exact format so the intended recipient can decrypt them.
+
+**To encrypt plaintext bytes `M` for a recipient's public key:**
+
+1. Generate a random 32-byte AES key `K` and a random 12-byte nonce `N`.
+2. Encrypt `M` with AES-256-GCM (key `K`, nonce `N`). Output: `C || T` (ciphertext + 16-byte GCM tag).
+3. Encrypt `K` with RSA-OAEP SHA-256 using the recipient's public key. Output: `E_K`.
+4. Assemble:
+
+```
+[ 4 bytes big-endian: len(E_K) ][ E_K ][ N (12 bytes) ][ C || T ]
+```
+
+5. Base64-encode the assembled blob for inclusion in API fields.
+
+**Public key format:** Base64-encoded DER `SubjectPublicKeyInfo` (PKCS#8 public format). This is compatible with `window.crypto.subtle.exportKey("spki", key)` in the Web Crypto API and `openssl rsa -pubout -outform DER`.
+
+**To decrypt:** Base64-decode, read `rsa_len` (4 bytes BE), read `E_K` (`rsa_len` bytes), read `N` (12 bytes), remainder is `C || T`. Decrypt `E_K` with RSA-OAEP SHA-256 private key → `K`. Decrypt `C || T` with AES-256-GCM (key `K`, nonce `N`) → `M`.
+
+#### Key Types
+
+| `key_type`         | Meaning |
+|--------------------|---------|
+| `"openneutron-1"`  | RSA public key (DER SPKI), hybrid RSA-OAEP + AES-256-GCM. Use the scheme above. |
+| `"none"`           | No key available. The remote server does not support OPNTRN, or the user has no registered key. E2EE is not possible for this recipient. |
 
 #### Technical Details
 
-- **DKIM signing**: On startup, the server loads the DKIM private key from `dkim.private_key_path` in `config.yml`. Each outgoing external email is individually signed with `rsa-sha256` / `relaxed/relaxed` canonicalization. The `DKIM-Signature` header is prepended to each message before SMTP delivery.
-- **MX resolution**: For external recipients, the server performs a DNS MX lookup on the recipient's domain and connects to the highest-priority MX host on port 25 with opportunistic STARTTLS.
-- **EHLO domain**: The outgoing SMTP FSM uses the server's configured domain in the EHLO greeting (not `localhost`), which is required for compatibility with Gmail, Microsoft 365, and other professional SMTP servers.
-- **Dot-stuffing**: The DATA phase properly dot-stuffs lines beginning with `.` per RFC 5321 §4.5.2.
-- **Sent email tracking**: The sender's local copy is stored in `sentEmailIds` (separate from `emailIds` which tracks received mail). This allows the client to list sent emails without decrypting them on the server.
+- **OPNTRN GETKEY**: For external addresses, the server connects to the recipient's MX on port 25, performs STARTTLS, re-sends EHLO, and checks for `250-OPNTRN` in the capability list. If present, it sends `OPNTRN GETKEY user@domain` for each address on that domain. Responses are `250 OPNTRN KEY openneutron-1 <base64-pubkey>` or `250 OPNTRN NOKEY`. After all queries the server sends `QUIT`.
+- **OPNTRN E2EE**: When delivering an encrypted email to an OPNTRN-capable server, the sending FSM issues `OPNTRN E2EE` immediately after EHLO (before `MAIL FROM`). The receiving server sets an internal flag so the incoming payload is stored as-is (skipping server-side encryption) and marked `secure = true`.
+- **DKIM signing**: Each outgoing email is individually signed with `rsa-sha256` / `relaxed/relaxed` canonicalization before SMTP delivery.
+- **MX resolution**: DNS MX lookup on the recipient's domain; falls back to the domain itself (implicit MX per RFC 5321) if no MX record exists.
+- **EHLO domain**: The configured server domain is used in the EHLO greeting.
+- **Sent email tracking**: The sender's local copy is stored in `sentEmailIds` (separate from `emailIds`). The client encrypts the local copy for its own public key so the server never holds the plaintext.
 
 #### POST /email/publickeys
-Resolve public keys for a list of email addresses. Returns keys only for local users; external addresses return `null` keys.
+Resolve public keys for a list of email addresses. Local users are looked up directly. External addresses trigger an OPNTRN key exchange with the recipient's MX server.
 
 **Request**: `GetPublicKeysRequest`
 ```json
 {
-  "addresses": ["alice@example.com", "bob@openneutron.com"]
+  "addresses": ["alice@remote.example.com", "bob@local.example.com", "carol@gmail.com"]
 }
 ```
 **Response**: `GetPublicKeysResponse`
@@ -513,22 +587,27 @@ Resolve public keys for a list of email addresses. Returns keys only for local u
 {
   "keys": [
     {
-      "address": "alice@example.com",
-      "public_key": null,
-      "key_type": "none"
+      "address": "alice@remote.example.com",
+      "public_key": "MIIBIjANBgkq...",
+      "key_type": "openneutron-1"
     },
     {
-      "address": "bob@openneutron.com",
-      "public_key": "base64-encoded-DER-public-key",
+      "address": "bob@local.example.com",
+      "public_key": "MIIBIjANBgkq...",
+      "key_type": "openneutron-1"
+    },
+    {
+      "address": "carol@gmail.com",
+      "public_key": null,
       "key_type": "none"
     }
   ]
 }
 ```
 
-> **`key_type`**: Always `"none"` in the current version. Reserved for future use when negotiated E2EE is implemented — possible values will include `"x25519"`, `"kyber"`, etc.
+> **`public_key`**: Base64-encoded DER `SubjectPublicKeyInfo` bytes of the recipient's RSA public key, or `null` if unavailable. The order of `keys` matches the order of `addresses` in the request.
 >
-> **`public_key`**: Base64-encoded DER public key bytes, or `null` if the user does not exist or has no key set.
+> **`key_type`**: `"openneutron-1"` when a key was obtained (use the hybrid RSA-OAEP + AES-256-GCM scheme). `"none"` when no key is available (E2EE not possible for this recipient).
 
 #### POST /email/sendencrypted
 Send an email to one or more recipients. The server stores a local copy for the sender and delivers each recipient's payload individually.
@@ -536,29 +615,38 @@ Send an email to one or more recipients. The server stores a local copy for the 
 **Request**: `SendEncryptedRequest`
 ```json
 {
-  "e2ee": false,
   "localcopy": {
-    "to": ["alice@example.com", "bob@openneutron.com"],
+    "to": ["alice@remote.example.com", "bob@local.example.com"],
     "timestamp": 1711540000,
-    "public_key_hash": "base64-encoded-sha256-hash",
-    "raw_data": "base64-encoded-email-bytes"
+    "public_key_hash": "base64-sha256-of-sender-public-key",
+    "raw_data": "base64-encoded-email-bytes-encrypted-for-sender",
+    "e2ee": true
   },
   "recipients": {
-    "alice@example.com": "base64-encoded-email-bytes",
-    "bob@openneutron.com": "base64-encoded-email-bytes"
+    "alice@remote.example.com": { "data": "base64-encoded-email-bytes-encrypted-for-alice", "e2ee": true },
+    "bob@local.example.com":    { "data": "base64-encoded-email-bytes-encrypted-for-bob",   "e2ee": true },
+    "carol@gmail.com":          { "data": "base64-encoded-raw-email-bytes",                  "e2ee": false }
   }
 }
 ```
 
-> **`e2ee`**: Boolean flag. `false` means envelope encryption was not negotiated (the bytes may or may not be encrypted — the server does not inspect them). Reserved for future E2EE handshake tracking.
+> **`localcopy.from`** is auto-filled by the server as `<username>@<domain>`. Do not include it in the request.
 >
-> **`localcopy`**: The sender's own copy of the email. The `from` field is **auto-filled** by the server as `<username>@<domain>`. The `raw_data` is stored as-is (the server assumes the client encrypted it for its own public key). The UID of the stored copy is returned in the response and added to the sender's `sent_emails`.
+> **`localcopy.raw_data`**: The email bytes encrypted for the **sender's own** public key, base64-encoded. Stored in `sent_emails` as-is. The server never decrypts this.
 >
-> **`localcopy.public_key_hash`**: Base64-encoded SHA-256 hash of the sender's public key. Stored alongside the email for client-side verification.
+> **`localcopy.public_key_hash`**: Base64-encoded SHA-256 hash of the sender's public key DER bytes (`SHA-256(DER_bytes)`). Stored alongside the email for client-side key-change detection.
 >
-> **`recipients`**: A map of `address → base64-email-bytes`. Each entry is delivered **separately**:
->   - **Local recipients** (address domain matches the server's domain): Not currently auto-stored — delivery to local users is handled by SMTP. The bytes are DKIM-signed (if configured) and sent via SMTP to the local MX.
->   - **External recipients**: The bytes are DKIM-signed (if configured) and sent via SMTP to the recipient domain's MX server using opportunistic STARTTLS.
+> **`localcopy.timestamp`**: Unix timestamp (seconds) to use as the email's creation time.
+>
+> **`localcopy.e2ee`**: Whether the local copy blob was encrypted with the sender's own public key. Stored alongside the email so the client knows whether to decrypt it.
+>
+> **`recipients`**: Map of `address → { data, e2ee }`. Each entry specifies the base64-encoded email bytes for that recipient and whether the blob is client-side encrypted.
+>
+> **`recipients[].data`**: Base64-encoded email bytes. When `e2ee: true`, this must be encrypted with the recipient's public key using the `openneutron-1` scheme. When `e2ee: false`, this is the raw (unencrypted) email bytes.
+>
+> **`recipients[].e2ee`**: Per-recipient flag. When `true`, the server sends `OPNTRN E2EE` before `MAIL FROM` to OPNTRN-capable receiving servers, signalling them to store the payload as-is without re-encrypting. When `false`, the payload is delivered as a normal SMTP message. This allows mixed-mode sending: some recipients get E2EE delivery while others (on legacy servers with no key) get plaintext delivery — all in a single API call.
+>
+> Recipients with no OPNTRN key (returned as `key_type: "none"` from `/email/publickeys`) should be sent with `e2ee: false`.
 
 **Response**: `SendEncryptedResponse`
 ```json
@@ -567,12 +655,12 @@ Send an email to one or more recipients. The server stores a local copy for the 
   "sent_email_uid": 12345678901234567890,
   "delivery_results": [
     {
-      "address": "alice@example.com",
+      "address": "alice@remote.example.com",
       "success": true,
       "error": null
     },
     {
-      "address": "bob@openneutron.com",
+      "address": "bob@local.example.com",
       "success": true,
       "error": null
     }
@@ -580,9 +668,9 @@ Send an email to one or more recipients. The server stores a local copy for the 
 }
 ```
 
-> **`sent_email_uid`**: The UID of the stored sender copy. Use the `/email/sent/*` endpoints below to query it.
+> **`sent_email_uid`**: UID of the stored local copy. Use `/email/sent/get` to retrieve it.
 >
-> **`delivery_results`**: Per-recipient delivery outcome. `success: true` means the remote SMTP server accepted the message. If `success: false`, the `error` field contains details.
+> **`delivery_results`**: Per-recipient delivery outcome. `success: true` means the remote SMTP server accepted the message with a 250 response. On partial failure the response still returns HTTP 200 — check each entry's `success` field.
 
 ---
 

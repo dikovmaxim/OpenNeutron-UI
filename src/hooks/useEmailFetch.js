@@ -4,6 +4,7 @@ import { keySession } from '@/keySession'
 import api from '@/api'
 import { decryptEmail } from '@/crypto'
 import { parseEmail } from '@/emailParser'
+import { addressBook } from '@/addressBook'
 
 const LIMIT = 20
 
@@ -46,15 +47,19 @@ export function useEmailFetch() {
               }
               const text = await decryptEmail(data, privateKey)
               const parsed = parseEmail(text)
+              addressBook.addAll(parsed?.from ? [parsed.from] : [])
+              addressBook.addAll(parsed?.to ?? [])
+              addressBook.addAll(parsed?.cc ?? [])
               newPreviews[uid] = {
                 subject:     parsed?.subject     ?? '(no subject)',
                 from:        parsed?.from        ?? null,
                 date:        parsed?.date        ?? (received_at ? new Date(received_at) : null),
                 preview:     parsed?.preview     ?? '',
                 attachments: parsed?.attachments ?? [],
+                e2ee:        parsed?.e2ee        ?? false,
               }
             } catch {
-              newPreviews[uid] = { subject: '(decryption failed)', from: null, date: null, preview: '', attachments: [] }
+              newPreviews[uid] = { subject: '(encrypted)', from: null, date: received_at ? new Date(received_at) : null, preview: '', attachments: [], decryptFailed: true }
             }
           }),
         )

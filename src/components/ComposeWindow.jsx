@@ -8,6 +8,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Paperclip,
+  Trash2,
 } from 'lucide-react'
 import api from '@/api'
 import { storage } from '@/storage'
@@ -19,16 +20,16 @@ import { isValidEmail } from '@/lib/utils'
 import { AddressField } from '@/components/compose/AddressField'
 import { AttachmentChip } from '@/components/compose/AttachmentChip'
 
-const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null }) => {
+const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = null, onDeleteDraft }) => {
   const [minimized, setMinimized] = useState(false)
 
+  const currentDraftId = useRef(draftId ?? ('draft_' + Date.now()))
+
   const [toChips,  setToChips]  = useState(() => replyData?.to  ?? [])
-  const [ccChips,  setCcChips]  = useState([])
-  const [bccChips, setBccChips] = useState([])
+  const [ccChips,  setCcChips]  = useState(() => replyData?.cc  ?? [])
+  const [bccChips, setBccChips] = useState(() => replyData?.bcc ?? [])
   const [subject,  setSubject]  = useState(() => replyData?.subject ?? '')
   const [body,     setBody]     = useState(() => replyData?.body ?? '')
-  const [showCc,   setShowCc]   = useState(false)
-  const [showBcc,  setShowBcc]  = useState(false)
 
   const [attachments, setAttachments] = useState([])
   const [isDragOver,  setIsDragOver]  = useState(false)
@@ -37,6 +38,30 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null }) => {
   const [sendState,   setSendState]   = useState('idle')
   const [sendError,   setSendError]   = useState('')
   const [sendResults, setSendResults] = useState([])
+
+  const buildDraft = useCallback(() => ({
+    id:        currentDraftId.current,
+    to:        toChips,
+    cc:        ccChips,
+    bcc:       bccChips,
+    subject,
+    body,
+    updatedAt: Date.now(),
+  }), [toChips, ccChips, bccChips, subject, body])
+
+  const handleClose = useCallback(() => {
+    const hasContent = toChips.length > 0 || subject.trim() || body.trim() || attachments.length > 0
+    if (hasContent && sendState !== 'done') {
+      onClose(buildDraft())
+    } else {
+      onClose(null)
+    }
+  }, [toChips, subject, body, attachments, sendState, buildDraft, onClose])
+
+  const handleDiscard = useCallback(() => {
+    if (draftId) onDeleteDraft?.(draftId)
+    onClose(null)
+  }, [draftId, onDeleteDraft, onClose])
 
   const windowRef   = useRef(null)
   const isResizing  = useRef(false)
@@ -163,6 +188,8 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null }) => {
       const token   = storage.getToken()
       const headers = { Authorization: `Bearer ${token}` }
 
+      console.log('requestnig keys for users', allRecipients)
+      setSendState('fetchingkeys')
       const resolveRes = await api.post(
         '/email/publickeys',
         { addresses: allRecipients },
@@ -171,8 +198,11 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null }) => {
       const keyMap = Object.fromEntries(
         resolveRes.data.keys.map((k) => [k.address, k.public_key]),
       )
+      console.log('got the keys', keyMap)
 
       setSendState('encrypting')
+
+      const hasAnyKey = allRecipients.some((addr) => !!keyMap[addr])
 
       const rawEmail = buildEmail({
         from:        myEmail,
@@ -183,6 +213,7 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null }) => {
         attachments: attachments.map(({ name, type, data }) => ({ name, type, data })),
         inReplyTo:   replyData?.inReplyTo ?? '',
         references:  replyData?.references ?? '',
+        e2ee:        hasAnyKey,
       })
 
       const privateKey = await keySession.get()
@@ -200,51 +231,58 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null }) => {
         const recipientKeyB64 = keyMap[addr]
         if (recipientKeyB64) {
           const recipientKey = await importPublicKeyBase64(recipientKeyB64)
-          recipientsPayload[addr] = await encryptEmail(rawEmail, recipientKey)
+          const encrypted = await encryptEmail(rawEmail, recipientKey)
+          console.log('encrypted with', addr, 'key available')
+          recipientsPayload[addr] = { data: encrypted, e2ee: true }
         } else {
-          recipientsPayload[addr] = utf8ToBase64(rawEmail)
+          console.log('encrypted with', addr, 'no key, plaintext base64')
+          recipientsPayload[addr] = { data: utf8ToBase64(rawEmail), e2ee: false }
         }
       }
 
       setSendState('sending')
 
+      console.log('sending payload to /email/sendencrypted', { localcopy: { e2ee: true }, recipients: Object.keys(recipientsPayload) })
       const res = await api.post(
         '/email/sendencrypted',
         {
-          e2ee: false,
           localcopy: {
             to:              allRecipients,
             timestamp:       Math.floor(Date.now() / 1000),
             public_key_hash: publicKeyHash,
             raw_data:        localCopyData,
+            e2ee:            true,
           },
           recipients: recipientsPayload,
         },
         { headers },
       )
 
+      console.log('sent ith', res.data)
       if (res.data.sent_email_uid) storage.addSentUid(res.data.sent_email_uid)
+      if (draftId) onDeleteDraft?.(draftId)
 
       setSendResults(res.data.delivery_results ?? [])
       setSendState('done')
       if (onSent) onSent(res.data.sent_email_uid)
-      setTimeout(() => onClose(), 2000)
+      setTimeout(() => onClose(null), 2000)
     } catch (err) {
       setSendError(err.response?.data?.error ?? err.message ?? 'Send failed. Please try again.')
       setSendState('error')
     }
   }
 
-  const isSending       = ['resolving', 'encrypting', 'sending'].includes(sendState)
+  const isSending       = ['resolving', 'fetchingkeys', 'encrypting', 'sending'].includes(sendState)
   const hasLoadingFiles = attachments.some((a) => a.status === 'loading')
   const isSendBlocked   = isSending || sendState === 'done'
 
   const sendStatusLabel = {
-    resolving:  'Resolving keys…',
-    encrypting: 'Encrypting…',
-    sending:    'Sending…',
-    done:       'Sent!',
-    error:      sendError,
+    resolving:    'Resolving…',
+    fetchingkeys: 'Fetching recipient keys…',
+    encrypting:   'Encrypting…',
+    sending:      'Sending…',
+    done:         'Sent!',
+    error:        sendError,
   }[sendState]
 
   return (
@@ -277,9 +315,16 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null }) => {
             {minimized ? <ChevronUp className="w-4 h-4" /> : <Minus className="w-4 h-4" />}
           </button>
           <button
-            onClick={onClose}
+            onClick={handleDiscard}
             className="p-1 rounded hover:bg-destructive/20 text-foreground/60 hover:text-destructive transition-colors"
-            title="Discard"
+            title="Discard draft"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+          <button
+            onClick={handleClose}
+            className="p-1 rounded hover:bg-accent text-foreground/60 hover:text-foreground transition-colors"
+            title="Save draft & close"
           >
             <X className="w-4 h-4" />
           </button>
@@ -289,25 +334,9 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null }) => {
       {!minimized && (
         <>
           <div className="shrink-0">
-            <AddressField label="To" chips={toChips} onChipsChange={setToChips} />
-
-            <div className="flex items-center px-3 h-7 border-b border-border/60 gap-3">
-              <button
-                onClick={() => setShowCc((v) => !v)}
-                className={`text-xs transition-colors ${showCc ? 'text-primary' : 'text-foreground/40 hover:text-foreground/70'}`}
-              >
-                Cc
-              </button>
-              <button
-                onClick={() => setShowBcc((v) => !v)}
-                className={`text-xs transition-colors ${showBcc ? 'text-primary' : 'text-foreground/40 hover:text-foreground/70'}`}
-              >
-                Bcc
-              </button>
-            </div>
-
-            {showCc  && <AddressField label="Cc"  chips={ccChips}  onChipsChange={setCcChips} />}
-            {showBcc && <AddressField label="Bcc" chips={bccChips} onChipsChange={setBccChips} />}
+            <AddressField label="To"  chips={toChips}  onChipsChange={setToChips} />
+            <AddressField label="Cc"  chips={ccChips}  onChipsChange={setCcChips} />
+            <AddressField label="Bcc" chips={bccChips} onChipsChange={setBccChips} />
 
             <div className="flex items-center border-b border-border/60 px-3">
               <span className="text-xs text-foreground/40 w-14 shrink-0">Subject</span>

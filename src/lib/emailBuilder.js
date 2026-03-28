@@ -13,7 +13,7 @@ function makeRand() {
   return Math.random().toString(36).slice(2, 10)
 }
 
-function buildHeaders({ from, to, cc, subject, date, messageId, inReplyTo, references }) {
+function buildHeaders({ from, to, cc, subject, date, messageId, inReplyTo, references, e2ee }) {
   return [
     `Date: ${date}`,
     `Message-ID: ${messageId}`,
@@ -25,6 +25,7 @@ function buildHeaders({ from, to, cc, subject, date, messageId, inReplyTo, refer
     `Subject: ${encodeRfc2047Word(subject) || '(no subject)'}`,
     'MIME-Version: 1.0',
     'X-Mailer: OpenNeutron',
+    ...(e2ee ? ['OpenNeutron-E2EE: true'] : []),
   ]
 }
 
@@ -51,7 +52,7 @@ function buildAttachmentPart({ name, type, data }, boundary) {
   ].join('\r\n')
 }
 
-export function buildEmail({ from, to = [], cc = [], subject, body = '', attachments = [], inReplyTo = '', references = '' }) {
+export function buildEmail({ from, to = [], cc = [], subject, body = '', attachments = [], inReplyTo = '', references = '', e2ee = false }) {
   const now    = new Date()
   const ts     = now.getTime()
   const rand   = makeRand()
@@ -66,6 +67,7 @@ export function buildEmail({ from, to = [], cc = [], subject, body = '', attachm
     messageId: makeMessageId(ts, rand, domain),
     inReplyTo,
     references,
+    e2ee,
   })
 
   if (attachments.length === 0) {

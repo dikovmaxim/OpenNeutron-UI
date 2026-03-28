@@ -1,6 +1,6 @@
 import { AddressChip } from './AddressChip'
 
-export function AddressRow({ label, addrs, myEmail }) {
+export function AddressRow({ label, addrs, myEmail, onComposeTo }) {
   if (!addrs || addrs.length === 0) return null
   return (
     <div className="flex items-start gap-3 min-w-0">
@@ -9,7 +9,7 @@ export function AddressRow({ label, addrs, myEmail }) {
       </span>
       <div className="flex flex-wrap gap-1.5">
         {addrs.map((addr, i) => (
-          <AddressChip key={i} addr={addr} myEmail={myEmail} />
+          <AddressChip key={i} addr={addr} myEmail={myEmail} onComposeTo={onComposeTo} />
         ))}
       </div>
     </div>

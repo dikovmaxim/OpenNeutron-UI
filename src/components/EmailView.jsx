@@ -23,6 +23,7 @@ import {
   MoreHorizontal,
   Download,
   Reply,
+  Lock,
 } from 'lucide-react'
 import api from '@/api'
 import { storage } from '@/storage'
@@ -30,6 +31,7 @@ import { decryptEmail } from '@/crypto'
 import { keySession } from '@/keySession'
 import { parseEmail, formatEmailDate } from '@/emailParser'
 import { downloadAttachment } from '@/lib/utils'
+import { addressBook } from '@/addressBook'
 import { SenderAvatar } from '@/components/SenderAvatar'
 import { EmailBody } from '@/components/email/EmailBody'
 import { AddressRow } from '@/components/email/AddressRow'
@@ -47,6 +49,7 @@ const EmailView = ({
   groups,
   selectedFolder,
   onReply,
+  onComposeTo,
 }) => {
   const [email, setEmail] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -73,6 +76,9 @@ const EmailView = ({
         const privateKey = await keySession.get()
         const text = await decryptEmail(res.data.data, privateKey)
         const parsed = parseEmail(text)
+        addressBook.addAll(parsed?.from ? [parsed.from] : [])
+        addressBook.addAll(parsed?.to ?? [])
+        addressBook.addAll(parsed?.cc ?? [])
         const receivedAt = res.data.received_at
         setEmail({ ...parsed, date: parsed.date ?? (receivedAt ? new Date(receivedAt) : null) })
       } catch (err) {
@@ -88,7 +94,8 @@ const EmailView = ({
     <div className="flex flex-col h-full bg-background overflow-hidden">
       <div className="h-14 px-4 border-b border-border shrink-0 bg-background flex items-center justify-between gap-3">
         {email && (
-          <p className="text-sm font-semibold text-foreground truncate flex-1 min-w-0">
+          <p className="text-sm font-semibold text-foreground truncate flex-1 min-w-0 flex items-center gap-1.5">
+            {email.e2ee && <Lock className="w-3.5 h-3.5 shrink-0 text-primary/70" title="End-to-end encrypted" />}
             {email.subject || '(no subject)'}
           </p>
         )}
@@ -218,7 +225,21 @@ const EmailView = ({
                         : '(unknown sender)'}
                     </p>
                     {email.from && (
-                      <p className="text-sm text-foreground/60 truncate">{email.from.email}</p>
+                      <p
+                        title={email.from.email}
+                        onClick={
+                          email.from.email !== myEmail && onComposeTo
+                            ? () => onComposeTo(email.from.email)
+                            : undefined
+                        }
+                        className={`text-sm text-foreground/60 truncate ${
+                          email.from.email !== myEmail && onComposeTo
+                            ? 'cursor-pointer hover:text-primary transition-colors'
+                            : ''
+                        }`}
+                      >
+                        {email.from.email}
+                      </p>
                     )}
                   </div>
                   {email.date && (
@@ -231,9 +252,9 @@ const EmailView = ({
             </div>
 
             <div className="space-y-2">
-              <AddressRow label="To" addrs={email.to} myEmail={myEmail} />
-              <AddressRow label="CC" addrs={email.cc} myEmail={myEmail} />
-              <AddressRow label="BCC" addrs={email.bcc} myEmail={myEmail} />
+              <AddressRow label="To" addrs={email.to} myEmail={myEmail} onComposeTo={onComposeTo} />
+              <AddressRow label="CC" addrs={email.cc} myEmail={myEmail} onComposeTo={onComposeTo} />
+              <AddressRow label="BCC" addrs={email.bcc} myEmail={myEmail} onComposeTo={onComposeTo} />
             </div>
           </div>
 

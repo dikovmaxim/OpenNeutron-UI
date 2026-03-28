@@ -310,6 +310,7 @@ export function parseEmail(raw) {
   const references = getHeader(headers, 'references') ?? ''
   const dateStr   = getHeader(headers, 'date') ?? ''
   const date     = dateStr ? new Date(dateStr) : null
+  const e2ee     = getHeader(headers, 'openneutron-e2ee')?.toLowerCase() === 'true'
   const ct       = parseContentType(getHeader(headers, 'content-type'))
 
   let textBody = null
@@ -347,6 +348,7 @@ export function parseEmail(raw) {
     replyTo,
     subject,
     date,
+    e2ee,
     messageId,
     inReplyTo,
     references,
