@@ -1,4 +1,6 @@
 
+import { argon2id, bcrypt } from 'hash-wasm'
+
 function toB64(buffer) {
   const bytes = new Uint8Array(buffer)
   let bin = ''
@@ -33,59 +35,81 @@ export async function exportPublicKeyBase64(publicKey) {
   return b64
 }
 
-export async function encryptPrivateKey(privateKey, password) {
-  const enc = new TextEncoder()
-  const salt = crypto.getRandomValues(new Uint8Array(16))
-  const iv = crypto.getRandomValues(new Uint8Array(12))
-
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw', enc.encode(password), 'PBKDF2', false, ['deriveKey'],
-  )
-  const aesKey = await crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: 100_000, hash: 'SHA-256' },
-    keyMaterial,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt'],
-  )
-
-  const pkcs8 = await crypto.subtle.exportKey('pkcs8', privateKey)
-  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, pkcs8)
-
-  return { salt: toB64(salt), iv: toB64(iv), data: toB64(encrypted) }
+// Convert a 32-char hex salt string (16 bytes) to Uint8Array
+function hexToBytes(hex) {
+  const arr = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < hex.length; i += 2)
+    arr[i / 2] = parseInt(hex.slice(i, i + 2), 16)
+  return arr
 }
 
+// Fixed 16-byte salt for auth hashing - security comes from bcrypt's work factor.
+// ASCII: "OpenNeutronAuth1"
+const AUTH_SALT = new Uint8Array([
+  0x4f, 0x70, 0x65, 0x6e, 0x4e, 0x65, 0x75, 0x74,
+  0x72, 0x6f, 0x6e, 0x41, 0x75, 0x74, 0x68, 0x31,
+])
+
+// Auth hash: bcrypt(password, fixed_salt, cost=10)
+// Server stores the encoded bcrypt string and compares directly.
 export async function hashPassword(password) {
   const enc = new TextEncoder()
-  const hash = await crypto.subtle.digest('SHA-256', enc.encode(password))
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
+  return bcrypt({
+    password: enc.encode(password),
+    salt: AUTH_SALT,
+    costFactor: 10,
+    outputType: 'encoded',
+  })
 }
 
-export async function decryptPrivateKey(encryptedKey, password) {
+// Derive 44 deterministic bytes from password+serverSalt:
+// first 32 -> AES-256-GCM key, last 12 -> IV.
+// bcrypt(password, salt) -> Argon2id(bcrypt_out, salt, 44 bytes)
+async function deriveKeyMaterial(password, serverSalt) {
   const enc = new TextEncoder()
-  const { salt, iv, data } = encryptedKey
+  const saltBytes = hexToBytes(serverSalt)
+  const bcryptOut = await bcrypt({
+    password: enc.encode(password),
+    salt: saltBytes,
+    costFactor: 10,
+    outputType: 'binary',
+  })
+  return argon2id({
+    password: bcryptOut,
+    salt: saltBytes,
+    iterations: 3,
+    memorySize: 65536,
+    hashLength: 44,
+    parallelism: 1,
+    outputType: 'binary',
+  })
+}
+
+// Encrypt the private key deterministically - returns a plain base64 string.
+// No random IV: key and IV are both derived from password + serverSalt.
+export async function encryptPrivateKey(privateKey, password, serverSalt) {
+  const material = await deriveKeyMaterial(password, serverSalt)
+  const aesKey = await crypto.subtle.importKey('raw', material.slice(0, 32), { name: 'AES-GCM' }, false, ['encrypt'])
+  const iv = material.slice(32, 44)
+  const pkcs8 = await crypto.subtle.exportKey('pkcs8', privateKey)
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, pkcs8)
+  return toB64(encrypted)
+}
+
+// Decrypt the private key. encryptedKey is a plain base64 string.
+export async function decryptPrivateKey(encryptedKey, password, serverSalt) {
+  const material = await deriveKeyMaterial(password, serverSalt)
+  const aesKey = await crypto.subtle.importKey('raw', material.slice(0, 32), { name: 'AES-GCM' }, false, ['decrypt'])
+  const iv = material.slice(32, 44)
   try {
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw', enc.encode(password), 'PBKDF2', false, ['deriveKey'],
-    )
-    const aesKey = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: fromB64(salt), iterations: 100_000, hash: 'SHA-256' },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['decrypt'],
-    )
     const pkcs8 = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: fromB64(iv) },
+      { name: 'AES-GCM', iv },
       aesKey,
-      fromB64(data),
+      fromB64(typeof encryptedKey === 'string' ? encryptedKey : encryptedKey.data),
     )
-    const privateKey = await crypto.subtle.importKey(
+    return crypto.subtle.importKey(
       'pkcs8', pkcs8, { name: 'RSA-OAEP', hash: 'SHA-256' }, true, ['decrypt'],
     )
-    return privateKey
   } catch (err) {
     throw err
   }
@@ -118,50 +142,40 @@ export async function exportPublicKeyFromPrivate(privateKey) {
   return toB64(spki)
 }
 
-const LEN_PREFIX_SIZE = 4
-
-export async function decryptEmail(base64Data, privateKey) {
-  const buf = new Uint8Array(fromB64(base64Data))
-
-  // Heuristic: if the data is valid UTF-8 text (no encrypted prefix structure),
-  // it was never encrypted — return as-is.
-  if (buf.length < LEN_PREFIX_SIZE + 4) {
-    return new TextDecoder().decode(buf)
-  }
-
-  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
-  const rsaLen = view.getUint32(0, false)
-
-  // If rsaLen looks unreasonable it's probably plain text
-  if (rsaLen === 0 || rsaLen > buf.length - LEN_PREFIX_SIZE) {
-    return new TextDecoder().decode(buf)
-  }
-
-  let off = LEN_PREFIX_SIZE
-  const rsaCipher = buf.slice(off, off + rsaLen);  off += rsaLen
-  const iv        = buf.slice(off, off + 12);       off += 12
-  const aesCipher = buf.slice(off)
-
-  // This will throw if the key is wrong or data is corrupted — callers must handle it
-  const aesRaw = await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, privateKey, rsaCipher)
-  const aesKey = await crypto.subtle.importKey('raw', aesRaw, { name: 'AES-GCM' }, false, ['decrypt'])
-  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, aesCipher)
-  return new TextDecoder().decode(plain)
-}
-
+// Encrypt plaintext for a recipient's public key.
+// Returns { aes_encrypted, data_encrypted } - both plain base64 strings.
+//   aes_encrypted  = Base64(RSA-OAEP(K))          - encrypted AES key
+//   data_encrypted = Base64(nonce || ciphertext || GCM-tag)
 export async function encryptEmail(plaintext, publicKey) {
-  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const iv     = crypto.getRandomValues(new Uint8Array(12))
   const aesRaw = crypto.getRandomValues(new Uint8Array(32))
   const aesKey = await crypto.subtle.importKey('raw', aesRaw, { name: 'AES-GCM' }, false, ['encrypt'])
   const enc = new TextEncoder()
   const aesCipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, enc.encode(plaintext))
   const rsaCipher = await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, publicKey, aesRaw)
-  const rsaLen = rsaCipher.byteLength
-  const out = new Uint8Array(LEN_PREFIX_SIZE + rsaLen + 12 + aesCipher.byteLength)
-  const view = new DataView(out.buffer)
-  view.setUint32(0, rsaLen, false)
-  out.set(new Uint8Array(rsaCipher), LEN_PREFIX_SIZE)
-  out.set(iv, LEN_PREFIX_SIZE + rsaLen)
-  out.set(new Uint8Array(aesCipher), LEN_PREFIX_SIZE + rsaLen + 12)
-  return toB64(out.buffer)
+  const dataOut = new Uint8Array(12 + aesCipher.byteLength)
+  dataOut.set(iv, 0)
+  dataOut.set(new Uint8Array(aesCipher), 12)
+  return {
+    aes_encrypted:  toB64(rsaCipher),
+    data_encrypted: toB64(dataOut.buffer),
+  }
+}
+
+// Decrypt an email received from the server.
+//   data       = Base64(nonce || ciphertext || GCM-tag)  (from email.data)
+//   messageKey = Base64(RSA-OAEP-encrypted AES key)      (from email.message_key)
+//   privateKey = CryptoKey (RSA-OAEP private)
+// When messageKey is absent the data is assumed to be raw (unencrypted) bytes.
+export async function decryptEmail(data, messageKey, privateKey) {
+  if (!messageKey) {
+    return new TextDecoder().decode(new Uint8Array(fromB64(data)))
+  }
+  const aesRaw = await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, privateKey, fromB64(messageKey))
+  const aesKey = await crypto.subtle.importKey('raw', aesRaw, { name: 'AES-GCM' }, false, ['decrypt'])
+  const dataBuf = new Uint8Array(fromB64(data))
+  const iv         = dataBuf.slice(0, 12)
+  const ciphertext = dataBuf.slice(12)
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertext)
+  return new TextDecoder().decode(plain)
 }

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import {
   X,
   Minus,
@@ -10,15 +10,11 @@ import {
   Paperclip,
   Trash2,
 } from 'lucide-react'
-import api from '@/api'
-import { storage } from '@/storage'
-import { keySession } from '@/keySession'
-import { encryptEmail, getPublicCryptoKeyFromPrivate, importPublicKeyBase64, hashPublicKey } from '@/crypto'
-import { buildEmail } from '@/lib/emailBuilder'
-import { MAX_ATTACHMENT_BYTES, readFileAsBase64, utf8ToBase64, formatBytes } from '@/lib/mime'
-import { isValidEmail } from '@/lib/utils'
 import { AddressField } from '@/components/compose/AddressField'
 import { AttachmentChip } from '@/components/compose/AttachmentChip'
+import { useSendEmail } from '@/hooks/useSendEmail'
+import { useAttachments } from '@/hooks/useAttachments'
+import { useResizable } from '@/hooks/useResizable'
 
 const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = null, onDeleteDraft }) => {
   const [minimized, setMinimized] = useState(false)
@@ -31,13 +27,15 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
   const [subject,  setSubject]  = useState(() => replyData?.subject ?? '')
   const [body,     setBody]     = useState(() => replyData?.body ?? '')
 
-  const [attachments, setAttachments] = useState([])
-  const [isDragOver,  setIsDragOver]  = useState(false)
-  const fileInputRef = useRef(null)
+  const { sendState, sendError, sendResults, handleSend, reportError } = useSendEmail({
+    myEmail, replyData, draftId, onDeleteDraft, onSent, onClose,
+  })
 
-  const [sendState,   setSendState]   = useState('idle')
-  const [sendError,   setSendError]   = useState('')
-  const [sendResults, setSendResults] = useState([])
+  const { attachments, isDragOver, setIsDragOver, fileInputRef, addFiles, removeAttachment } = useAttachments({
+    onError: reportError,
+  })
+
+  const { windowRef, size, handleResizeMouseDown } = useResizable()
 
   const buildDraft = useCallback(() => ({
     id:        currentDraftId.current,
@@ -62,215 +60,6 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
     if (draftId) onDeleteDraft?.(draftId)
     onClose(null)
   }, [draftId, onDeleteDraft, onClose])
-
-  const windowRef   = useRef(null)
-  const isResizing  = useRef(false)
-  const resizeDir   = useRef('nw')
-  const resizeStart = useRef({})
-  const [size, setSize] = useState({ w: 520, h: 420 })
-
-  const addFiles = useCallback((files) => {
-    const oversized = []
-    const toAdd     = []
-
-    for (const file of files) {
-      if (file.size > MAX_ATTACHMENT_BYTES) {
-        oversized.push(`"${file.name}" (${formatBytes(file.size)})`)
-        continue
-      }
-      toAdd.push({
-        id:        `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        name:      file.name,
-        size:      file.size,
-        type:      file.type,
-        file,
-        status:    'loading',
-        data:      null,
-        readError: null,
-      })
-    }
-
-    if (oversized.length > 0) {
-      setSendError(
-        `${oversized.length === 1 ? 'File exceeds' : 'Files exceed'} the 20 MB limit: ${oversized.join(', ')}`,
-      )
-      setSendState('error')
-    }
-
-    if (toAdd.length === 0) return
-
-    setAttachments((prev) => [...prev, ...toAdd])
-
-    for (const att of toAdd) {
-      readFileAsBase64(att.file)
-        .then((data) => {
-          setAttachments((prev) =>
-            prev.map((a) => (a.id === att.id ? { ...a, status: 'ready', data } : a)),
-          )
-        })
-        .catch((err) => {
-          setAttachments((prev) =>
-            prev.map((a) =>
-              a.id === att.id ? { ...a, status: 'error', readError: err.message } : a,
-            ),
-          )
-        })
-    }
-  }, [])
-
-  const handleResizeMouseDown = (e, dir) => {
-    e.preventDefault()
-    e.stopPropagation()
-    isResizing.current  = true
-    resizeDir.current   = dir
-    resizeStart.current = { x: e.clientX, y: e.clientY, w: size.w, h: size.h }
-  }
-
-  useEffect(() => {
-    const onMouseMove = (e) => {
-      if (!isResizing.current) return
-      const dir = resizeDir.current
-      const dx  = resizeStart.current.x - e.clientX
-      const dy  = resizeStart.current.y - e.clientY
-      setSize({
-        w: dir === 'n' ? resizeStart.current.w : Math.max(380, resizeStart.current.w + dx),
-        h: dir === 'w' ? resizeStart.current.h : Math.max(300, resizeStart.current.h + dy),
-      })
-    }
-    const onMouseUp = () => { isResizing.current = false }
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup',   onMouseUp)
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup',   onMouseUp)
-    }
-  }, [])
-
-  const handleSend = async () => {
-    const allTo  = toChips.filter((a) => a.trim())
-    const allCc  = ccChips.filter((a) => a.trim())
-    const allBcc = bccChips.filter((a) => a.trim())
-    const allRecipients = [...allTo, ...allCc, ...allBcc]
-
-    if (allTo.length === 0) {
-      setSendError('Add at least one recipient in the To field.')
-      setSendState('error')
-      return
-    }
-    const invalid = allRecipients.filter((a) => !isValidEmail(a))
-    if (invalid.length > 0) {
-      setSendError(`Invalid address${invalid.length > 1 ? 'es' : ''}: ${invalid.join(', ')}`)
-      setSendState('error')
-      return
-    }
-
-    const loadingFiles = attachments.filter((a) => a.status === 'loading')
-    if (loadingFiles.length > 0) {
-      setSendError(
-        `${loadingFiles.length} attachment${loadingFiles.length > 1 ? 's are' : ' is'} still loading — please wait.`,
-      )
-      setSendState('error')
-      return
-    }
-    const failedFiles = attachments.filter((a) => a.status === 'error')
-    if (failedFiles.length > 0) {
-      setSendError(
-        `Remove failed attachment${failedFiles.length > 1 ? 's' : ''} before sending: ${failedFiles.map((a) => a.name).join(', ')}`,
-      )
-      setSendState('error')
-      return
-    }
-
-    setSendError('')
-    setSendState('resolving')
-
-    try {
-      const token   = storage.getToken()
-      const headers = { Authorization: `Bearer ${token}` }
-
-      console.log('requestnig keys for users', allRecipients)
-      setSendState('fetchingkeys')
-      const resolveRes = await api.post(
-        '/email/publickeys',
-        { addresses: allRecipients },
-        { headers },
-      )
-      const keyMap = Object.fromEntries(
-        resolveRes.data.keys.map((k) => [k.address, k.public_key]),
-      )
-      console.log('got the keys', keyMap)
-
-      setSendState('encrypting')
-
-      const hasAnyKey = allRecipients.some((addr) => !!keyMap[addr])
-
-      const rawEmail = buildEmail({
-        from:        myEmail,
-        to:          allTo,
-        cc:          allCc,
-        subject,
-        body,
-        attachments: attachments.map(({ name, type, data }) => ({ name, type, data })),
-        inReplyTo:   replyData?.inReplyTo ?? '',
-        references:  replyData?.references ?? '',
-        e2ee:        hasAnyKey,
-      })
-
-      const privateKey = await keySession.get()
-      if (!privateKey) throw new Error('Session expired — please log in again.')
-
-      const myPublicKey   = await getPublicCryptoKeyFromPrivate(privateKey)
-      const localCopyData = await encryptEmail(rawEmail, myPublicKey)
-
-      let publicKeyHash = ''
-      const storedPubKey = storage.getPublicKey()
-      if (storedPubKey) publicKeyHash = await hashPublicKey(storedPubKey)
-
-      const recipientsPayload = {}
-      for (const addr of allRecipients) {
-        const recipientKeyB64 = keyMap[addr]
-        if (recipientKeyB64) {
-          const recipientKey = await importPublicKeyBase64(recipientKeyB64)
-          const encrypted = await encryptEmail(rawEmail, recipientKey)
-          console.log('encrypted with', addr, 'key available')
-          recipientsPayload[addr] = { data: encrypted, e2ee: true }
-        } else {
-          console.log('encrypted with', addr, 'no key, plaintext base64')
-          recipientsPayload[addr] = { data: utf8ToBase64(rawEmail), e2ee: false }
-        }
-      }
-
-      setSendState('sending')
-
-      console.log('sending payload to /email/sendencrypted', { localcopy: { e2ee: true }, recipients: Object.keys(recipientsPayload) })
-      const res = await api.post(
-        '/email/sendencrypted',
-        {
-          localcopy: {
-            to:              allRecipients,
-            timestamp:       Math.floor(Date.now() / 1000),
-            public_key_hash: publicKeyHash,
-            raw_data:        localCopyData,
-            e2ee:            true,
-          },
-          recipients: recipientsPayload,
-        },
-        { headers },
-      )
-
-      console.log('sent ith', res.data)
-      if (res.data.sent_email_uid) storage.addSentUid(res.data.sent_email_uid)
-      if (draftId) onDeleteDraft?.(draftId)
-
-      setSendResults(res.data.delivery_results ?? [])
-      setSendState('done')
-      if (onSent) onSent(res.data.sent_email_uid)
-      setTimeout(() => onClose(null), 2000)
-    } catch (err) {
-      setSendError(err.response?.data?.error ?? err.message ?? 'Send failed. Please try again.')
-      setSendState('error')
-    }
-  }
 
   const isSending       = ['resolving', 'fetchingkeys', 'encrypting', 'sending'].includes(sendState)
   const hasLoadingFiles = attachments.some((a) => a.status === 'loading')
@@ -302,6 +91,7 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
         </>
       )}
 
+      {/* Title bar */}
       <div className="flex items-center justify-between px-3 h-10 bg-accent/60 rounded-t-lg border-b border-border shrink-0 select-none">
         <span className="text-sm font-medium text-foreground truncate">
           {subject || 'New Message'}
@@ -333,6 +123,7 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
 
       {!minimized && (
         <>
+          {/* Address + subject fields */}
           <div className="shrink-0">
             <AddressField label="To"  chips={toChips}  onChipsChange={setToChips} />
             <AddressField label="Cc"  chips={ccChips}  onChipsChange={setCcChips} />
@@ -350,6 +141,7 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
             </div>
           </div>
 
+          {/* Body + drag-and-drop */}
           <div
             className="flex-1 flex flex-col relative min-h-0"
             onDragOver={(e)  => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true) }}
@@ -380,16 +172,13 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
             {attachments.length > 0 && (
               <div className="flex flex-wrap gap-1.5 px-3 py-2 border-t border-border/40">
                 {attachments.map((att) => (
-                  <AttachmentChip
-                    key={att.id}
-                    att={att}
-                    onRemove={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                  />
+                  <AttachmentChip key={att.id} att={att} onRemove={() => removeAttachment(att.id)} />
                 ))}
               </div>
             )}
           </div>
 
+          {/* Footer: status + send */}
           <div className="shrink-0 px-3 py-2 border-t border-border flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
               {hasLoadingFiles && !isSending && (
@@ -451,7 +240,7 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
                 <Paperclip className="w-4 h-4" />
               </button>
               <button
-                onClick={handleSend}
+                onClick={() => handleSend({ toChips, ccChips, bccChips, subject, body, attachments })}
                 disabled={isSendBlocked || hasLoadingFiles}
                 title={hasLoadingFiles ? 'Waiting for files to finish loading…' : undefined}
                 className="flex items-center gap-2 px-4 py-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"

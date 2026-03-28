@@ -143,7 +143,7 @@ const Sidebar = ({
                 )}
               </div>
 
-              {/* Dropdown — appears on row hover */}
+              {/* Dropdown - appears on row hover */}
               <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover/item:opacity-100 transition-opacity">
                 <DropdownMenuRoot>
                   <DropdownMenuTrigger asChild>

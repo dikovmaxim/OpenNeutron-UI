@@ -33,11 +33,13 @@ const SetupForm = () => {
     setLoading(true)
     setError('')
     try {
+      const currentUsername = storage.getUsername()
+      const serverSalt = keySession.getSalt()
       const keyPair = await generateKeyPair()
 
       const publicKeyBase64 = await exportPublicKeyBase64(keyPair.publicKey)
 
-      const encryptedKey = await encryptPrivateKey(keyPair.privateKey, password)
+      const encryptedKey = await encryptPrivateKey(keyPair.privateKey, password, serverSalt)
 
       const passwordHash = await hashPassword(password)
 
@@ -46,13 +48,11 @@ const SetupForm = () => {
       try {
         await api.post(
           '/user/setup',
-          { password: passwordHash, public_key: publicKeyBase64 },
+          { password: passwordHash, public_key: publicKeyBase64, encrypted_private_key: encryptedKey },
           { headers: { Authorization: `Bearer ${activeToken}` } },
         )
       } catch (setupErr) {
         if (setupErr.response?.status !== 409) throw setupErr
-
-        const currentUsername = storage.getUsername()
 
         await api.delete('/admin/users', {
           data: { username: currentUsername },
@@ -70,11 +70,12 @@ const SetupForm = () => {
           password: passwordHash,
         })
         activeToken = loginRes.data.token
+        if (loginRes.data.salt) keySession.setSalt(loginRes.data.salt)
         storage.set({ token: activeToken })
 
         await api.post(
           '/user/setup',
-          { password: passwordHash, public_key: publicKeyBase64 },
+          { password: passwordHash, public_key: publicKeyBase64, encrypted_private_key: encryptedKey },
           { headers: { Authorization: `Bearer ${activeToken}` } },
         )
       }
@@ -115,6 +116,7 @@ const SetupForm = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 required
               />
+
             </div>
             <div>
               <label htmlFor="confirm" className="block text-sm font-medium mb-1">

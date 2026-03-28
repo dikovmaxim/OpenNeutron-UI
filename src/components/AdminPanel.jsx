@@ -136,7 +136,7 @@ const AdminPanel = () => {
                     className={`border-b border-border last:border-0 ${idx % 2 === 0 ? '' : 'bg-secondary/10'}`}
                   >
                     <td className="px-4 py-3 font-medium">{user.username}</td>
-                    <td className="px-4 py-3 text-foreground/70">{user.email ?? '—'}</td>
+                    <td className="px-4 py-3 text-foreground/70">{user.email ?? '-'}</td>
                     <td className="px-4 py-3">
                       <button
                         onClick={() => !isSelf && handleToggleAdmin(user)}

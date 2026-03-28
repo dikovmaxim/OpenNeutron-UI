@@ -27,26 +27,35 @@ const Login = () => {
     try {
       const passwordHash = await hashPassword(password)
       const response = await api.post('/auth/login', { username, password: passwordHash })
-      const { token, force_reset, username: name, public_key } = response.data
+      const { token, force_reset, username: name, public_key, salt, encrypted_private_key } = response.data
+
+      if (storage.getUsername() !== name) {
+        keySession.clear()
+      }
+
       storage.set({ token, force_reset, username: name })
       if (public_key) storage.set({ public_key })
+      if (salt) keySession.setSalt(salt)
 
       if (force_reset) {
         setPhase('setup')
         return
       }
 
-      const encryptedKey = storage.getEncryptedKey()
+      const encryptedKey = encrypted_private_key
       if (!encryptedKey) {
-        storage.set({ force_reset: true })
-        setPhase('setup')
+        setError('No encrypted key returned by server')
         return
       }
 
+      storage.set({ encrypted_key: encryptedKey })
+
       try {
-        const privateKey = await decryptPrivateKey(encryptedKey, password)
+        const privateKey = await decryptPrivateKey(encryptedKey, password, salt)
         await keySession.set(privateKey)
       } catch (err) {
+        setError('Failed to decrypt private key - wrong password or corrupted key')
+        return
       }
 
       navigate('/')
@@ -64,9 +73,11 @@ const Login = () => {
     setLoading(true)
     setError('')
     try {
+      const currentUsername = storage.getUsername()
+      const serverSalt = keySession.getSalt()
       const keyPair = await generateKeyPair()
       const publicKeyBase64 = await exportPublicKeyBase64(keyPair.publicKey)
-      const encryptedKey = await encryptPrivateKey(keyPair.privateKey, setupPassword)
+      const encryptedKey = await encryptPrivateKey(keyPair.privateKey, setupPassword, serverSalt)
       const passwordHash = await hashPassword(setupPassword)
 
       let activeToken = storage.getToken()
@@ -74,13 +85,12 @@ const Login = () => {
       try {
         await api.post(
           '/user/setup',
-          { password: passwordHash, public_key: publicKeyBase64 },
+          { password: passwordHash, public_key: publicKeyBase64, encrypted_private_key: encryptedKey },
           { headers: { Authorization: `Bearer ${activeToken}` } },
         )
       } catch (setupErr) {
         if (setupErr.response?.status !== 409) throw setupErr
 
-        const currentUsername = storage.getUsername()
         await api.delete('/admin/users', {
           data: { username: currentUsername },
           headers: { Authorization: `Bearer ${activeToken}` },
@@ -93,10 +103,11 @@ const Login = () => {
           password: passwordHash,
         })
         activeToken = loginRes.data.token
+        if (loginRes.data.salt) keySession.setSalt(loginRes.data.salt)
         storage.set({ token: activeToken })
         await api.post(
           '/user/setup',
-          { password: passwordHash, public_key: publicKeyBase64 },
+          { password: passwordHash, public_key: publicKeyBase64, encrypted_private_key: encryptedKey },
           { headers: { Authorization: `Bearer ${activeToken}` } },
         )
       }
@@ -136,6 +147,7 @@ const Login = () => {
                   onChange={(e) => setSetupPassword(e.target.value)}
                   required
                 />
+
               </div>
               <div>
                 <label htmlFor="setup-confirm" className="block text-sm font-medium mb-1">Re-enter Password</label>

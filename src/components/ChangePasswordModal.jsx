@@ -15,7 +15,7 @@ import {
 } from '@/crypto'
 import { keySession } from '@/keySession'
 import { storage } from '@/storage'
-import { adminSetCredentials, emailListAll, emailGetRaw, emailSetRaw } from '@/api'
+import { userSetCredentials, emailListAll, emailGetRaw, emailSetRaw } from '@/api'
 
 export function ChangePasswordModal({ isOpen, onClose }) {
   const [phase, setPhase] = useState('form') // 'form' | 'working' | 'done'
@@ -62,9 +62,12 @@ export function ChangePasswordModal({ isOpen, onClose }) {
       setStatus('Verifying current password…')
       const encryptedKey = storage.getEncryptedKey()
       if (!encryptedKey) throw new Error('No encrypted key found in storage')
+      const serverSalt = keySession.getSalt()
+      if (!serverSalt) throw new Error('Server salt not found - please log out and back in')
+      const username = storage.getUsername()
       let oldPrivateKey
       try {
-        oldPrivateKey = await decryptPrivateKey(encryptedKey, currentPwd)
+        oldPrivateKey = await decryptPrivateKey(encryptedKey, currentPwd, serverSalt)
       } catch {
         setPhase('form')
         setFormError('Current password is incorrect')
@@ -75,13 +78,12 @@ export function ChangePasswordModal({ isOpen, onClose }) {
       setStatus('Generating new key pair…')
       const newKeyPair = await generateKeyPair()
       const newPublicKeyB64 = await exportPublicKeyBase64(newKeyPair.publicKey)
-      const newEncryptedKey = await encryptPrivateKey(newKeyPair.privateKey, newPwd)
+      const newEncryptedKey = await encryptPrivateKey(newKeyPair.privateKey, newPwd, serverSalt)
       const newPasswordHash = await hashPassword(newPwd)
 
       // 3. Push new credentials to server
       setStatus('Updating credentials on server…')
-      const username = storage.getUsername()
-      await adminSetCredentials(username, newPasswordHash, newPublicKeyB64)
+      await userSetCredentials(newPasswordHash, newPublicKeyB64, newEncryptedKey)
 
       // 4. Update local storage and session key BEFORE re-encrypting so server
       //    accepts future requests with the new token (token is unchanged here)
@@ -95,7 +97,7 @@ export function ChangePasswordModal({ isOpen, onClose }) {
       setProgress({ done: 0, total, failed: 0 })
 
       if (total === 0) {
-        setStatus('Done — no emails to re-encrypt.')
+        setStatus('Done - no emails to re-encrypt.')
         setPhase('done')
         return
       }
@@ -107,10 +109,10 @@ export function ChangePasswordModal({ isOpen, onClose }) {
       for (const uid of uids) {
         if (abortRef.current) break
         try {
-          const rawData = await emailGetRaw(uid)
-          const plaintext = await decryptEmail(rawData, oldPrivateKey)
-          const reEncrypted = await encryptEmail(plaintext, newKeyPair.publicKey)
-          await emailSetRaw(uid, reEncrypted)
+          const { data: rawData, message_key: rawMsgKey } = await emailGetRaw(uid)
+          const plaintext = await decryptEmail(rawData, rawMsgKey, oldPrivateKey)
+          const { aes_encrypted, data_encrypted } = await encryptEmail(plaintext, newKeyPair.publicKey)
+          await emailSetRaw(uid, data_encrypted, aes_encrypted)
           done++
         } catch {
           failed++
@@ -122,7 +124,7 @@ export function ChangePasswordModal({ isOpen, onClose }) {
       setStatus(
         failed === 0
           ? `All ${total} email${total !== 1 ? 's' : ''} re-encrypted successfully.`
-          : `Done — ${total - failed}/${total} re-encrypted. ${failed} could not be re-encrypted (already unreadable).`,
+          : `Done - ${total - failed}/${total} re-encrypted. ${failed} could not be re-encrypted (already unreadable).`,
       )
       setPhase('done')
     } catch (err) {

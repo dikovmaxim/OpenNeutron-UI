@@ -74,7 +74,8 @@ const EmailView = ({
           headers: { Authorization: `Bearer ${token}` },
         })
         const privateKey = await keySession.get()
-        const text = await decryptEmail(res.data.data, privateKey)
+        if (!privateKey) throw new Error('Private key is not available. Please log out and log back in.')
+        const text = await decryptEmail(res.data.data, res.data.message_key, privateKey)
         const parsed = parseEmail(text)
         addressBook.addAll(parsed?.from ? [parsed.from] : [])
         addressBook.addAll(parsed?.to ?? [])
@@ -82,6 +83,7 @@ const EmailView = ({
         const receivedAt = res.data.received_at
         setEmail({ ...parsed, date: parsed.date ?? (receivedAt ? new Date(receivedAt) : null) })
       } catch (err) {
+        console.error('[EmailView] Failed to load/decrypt email uid=%s:', uid, err)
         setEmail(null)
         setError(err?.message ?? 'Unknown error')
       } finally {

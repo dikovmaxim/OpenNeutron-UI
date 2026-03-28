@@ -39,13 +39,14 @@ export function useEmailFetch() {
         const privateKey = await keySession.get()
         const newPreviews = {}
         await Promise.all(
-          bulkRes.data.emails.map(async ({ uid, data, received_at }) => {
+          bulkRes.data.emails.map(async ({ uid, data, message_key, received_at }) => {
             try {
               if (!privateKey) {
-                newPreviews[uid] = { subject: '(key unavailable)', from: null, date: null, preview: '', attachments: [] }
+                console.warn('[useEmailFetch] Private key unavailable, cannot decrypt uid=%s', uid)
+                newPreviews[uid] = { subject: '(key unavailable)', from: null, date: received_at ? new Date(received_at) : null, preview: '', attachments: [], decryptFailed: true }
                 return
               }
-              const text = await decryptEmail(data, privateKey)
+              const text = await decryptEmail(data, message_key, privateKey)
               const parsed = parseEmail(text)
               addressBook.addAll(parsed?.from ? [parsed.from] : [])
               addressBook.addAll(parsed?.to ?? [])
@@ -58,7 +59,8 @@ export function useEmailFetch() {
                 attachments: parsed?.attachments ?? [],
                 e2ee:        parsed?.e2ee        ?? false,
               }
-            } catch {
+            } catch (err) {
+              console.error('[useEmailFetch] Failed to decrypt uid=%s:', uid, err)
               newPreviews[uid] = { subject: '(encrypted)', from: null, date: received_at ? new Date(received_at) : null, preview: '', attachments: [], decryptFailed: true }
             }
           }),

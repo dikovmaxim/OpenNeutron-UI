@@ -1,4 +1,5 @@
 const SESSION_KEY = 'openneutron.private_key_jwk'
+const SALT_KEY = 'openneutron.salt'
 
 let privateKeyCache = null
 
@@ -39,6 +40,7 @@ export const keySession = {
       privateKeyCache = await importPrivateKey(jwk)
       return privateKeyCache
     } catch (err) {
+      console.error('[keySession] Failed to restore private key from sessionStorage:', err)
       sessionStorage.removeItem(SESSION_KEY)
       return null
     }
@@ -46,5 +48,8 @@ export const keySession = {
   clear: () => {
     privateKeyCache = null
     sessionStorage.removeItem(SESSION_KEY)
+    sessionStorage.removeItem(SALT_KEY)
   },
+  setSalt: (salt) => sessionStorage.setItem(SALT_KEY, salt),
+  getSalt: () => sessionStorage.getItem(SALT_KEY),
 }

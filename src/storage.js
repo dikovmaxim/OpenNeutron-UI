@@ -39,9 +39,9 @@ export const storage = {
   setSentUids: (uids) => save({ sent_uids: uids }),
 
   clear: () => {
-    const { encrypted_key, public_key } = load()
+    const { encrypted_key, public_key, username } = load()
     localStorage.removeItem(KEY)
-    if (encrypted_key || public_key) save({ encrypted_key, public_key })
+    if (encrypted_key || public_key) save({ encrypted_key, public_key, username })
   },
   fullClear: () => localStorage.removeItem(KEY),
 

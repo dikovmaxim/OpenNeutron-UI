@@ -78,12 +78,25 @@ export const adminSetAdminStatus = async (username, isAdmin) => {
   return response.data
 }
 
-export const adminSetCredentials = async (username, passwordHash, publicKey) => {
+export const adminSetCredentials = async (username, passwordHash, publicKey, encryptedPrivateKey) => {
   const token = storage.getToken()
   const response = await api.post('/admin/users/credentials', {
     username,
     password: passwordHash,
     public_key: publicKey,
+    encrypted_private_key: encryptedPrivateKey,
+  }, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  return response.data
+}
+
+export const userSetCredentials = async (passwordHash, publicKey, encryptedPrivateKey) => {
+  const token = storage.getToken()
+  const response = await api.post('/user/credentials', {
+    password: passwordHash,
+    public_key: publicKey,
+    encrypted_private_key: encryptedPrivateKey,
   }, {
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -103,12 +116,15 @@ export const emailGetRaw = async (uid) => {
   const response = await api.post('/email/get', `{"uid":${uid}}`, {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
   })
-  return response.data.data
+  return { data: response.data.data, message_key: response.data.message_key }
 }
 
-export const emailSetRaw = async (uid, data) => {
+export const emailSetRaw = async (uid, data, messageKey) => {
   const token = storage.getToken()
-  const response = await api.post('/email/set', `{"uid":${uid},"data":"${data}"}`, {
+  const bodyStr = messageKey
+    ? `{"uid":${uid},"data":"${data}","message_key":"${messageKey}"}`
+    : `{"uid":${uid},"data":"${data}"}`
+  const response = await api.post('/email/set', bodyStr, {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
   })
   return response.data
