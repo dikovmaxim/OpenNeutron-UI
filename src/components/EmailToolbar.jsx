@@ -4,7 +4,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu'
-import { Trash2, MailOpen, Mail, Folder, ChevronLeft, ChevronRight, Check } from 'lucide-react'
+import { Trash2, MailOpen, Mail, Folder, ChevronLeft, ChevronRight, Check, RefreshCw } from 'lucide-react'
 
 export function EmailToolbar({
   pagedUids,
@@ -23,6 +23,8 @@ export function EmailToolbar({
   onMoveSelectedToGroup,
   onPrevPage,
   onNextPage,
+  onRefresh,
+  refreshing,
 }) {
   const allChecked = pagedUids.length > 0 && pagedUids.every(uid => checkedUids.has(uid))
 
@@ -78,6 +80,14 @@ export function EmailToolbar({
           title="Mark selected as unread"
         >
           <Mail className="w-4 h-4" />
+        </button>
+        <button
+          onClick={onRefresh}
+          disabled={refreshing}
+          className="p-1.5 rounded transition-colors text-foreground/70 hover:bg-accent hover:text-foreground disabled:opacity-40"
+          title="Refresh"
+        >
+          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
         </button>
         {groups.length > 0 && (
           <DropdownMenuRoot>

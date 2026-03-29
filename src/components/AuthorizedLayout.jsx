@@ -69,14 +69,16 @@ const AuthorizedLayout = () => {
     } catch {}
   }, [])
 
+  const handleRefresh = useCallback(() => {
+    fetchEmails(0)
+  }, [fetchEmails])
+
   useEffect(() => {
     checkServer()
     fetchEmails(0)
     fetchGroups()
-    const emailPollId = setInterval(() => fetchEmails(0), 5000)
     const serverPollId = setInterval(() => checkServer(), 30000)
     return () => {
-      clearInterval(emailPollId)
       clearInterval(serverPollId)
     }
   }, [])
@@ -322,6 +324,8 @@ const AuthorizedLayout = () => {
                   setPage(next)
                   if (next >= pageCount - 1 && hasMore) loadMore()
                 }}
+                onRefresh={handleRefresh}
+                refreshing={loading}
               />
               )}
               <EmailList

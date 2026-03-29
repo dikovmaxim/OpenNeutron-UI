@@ -1,4 +1,5 @@
 import { Check } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { EmailListItem } from '@/components/email/EmailListItem'
 
 const EmailList = ({
@@ -25,7 +26,18 @@ const EmailList = ({
   filterMode = 'all',
   onFilterModeChange,
 }) => {
+  const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false)
   const allChecked = uids.length > 0 && uids.every(uid => checkedUids?.has(uid))
+
+  useEffect(() => {
+    if (loading) {
+      setHasAttemptedLoad(true)
+    }
+  }, [loading])
+
+  useEffect(() => {
+    setHasAttemptedLoad(false)
+  }, [selectedFolder])
   return (
     <div className="flex flex-col h-full bg-background">
       <div className="flex items-center justify-between px-3 py-1.5 text-[11px] border-b border-border bg-background font-medium tracking-wide">
@@ -77,8 +89,11 @@ const EmailList = ({
             selectedFolder={selectedFolder}
           />
         ))}
-        {uids.length === 0 && !loading && (
-          <p className="text-sm text-foreground/55 text-center py-16">No emails in this view</p>
+        {uids.length === 0 && !loading && hasAttemptedLoad && (
+          <div className="text-center py-20">
+            <p className="text-lg font-medium text-foreground/80">It's quiet in here</p>
+            <p className="text-sm text-foreground/50 mt-1">There are no emails in this folder.</p>
+          </div>
         )}
         {hasMore && (
           <div className="p-4">
