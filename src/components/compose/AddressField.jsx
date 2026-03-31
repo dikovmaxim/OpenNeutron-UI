@@ -96,7 +96,7 @@ export function AddressField({ label, chips, onChipsChange }) {
       className="relative flex flex-wrap items-center gap-1 px-3 py-1.5 min-h-[34px] border-b border-border/60 cursor-text"
       onClick={() => inputRef.current?.focus()}
     >
-      <span className="text-xs text-foreground/40 w-7 shrink-0">{label}</span>
+      <span className="text-xs font-semibold text-foreground/40 w-7 shrink-0">{label}</span>
       {chips.map((addr, i) => (
         <Chip
           key={i}

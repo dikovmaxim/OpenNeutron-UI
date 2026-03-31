@@ -32,7 +32,7 @@ function buildHeaders({ from, to, cc, subject, date, messageId, inReplyTo, refer
 function buildTextPart(body, boundary) {
   return [
     `--${boundary}`,
-    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Type: text/html; charset=UTF-8',
     'Content-Transfer-Encoding: 8bit',
     '',
     body || '',
@@ -73,7 +73,7 @@ export function buildEmail({ from, to = [], cc = [], subject, body = '', attachm
   if (attachments.length === 0) {
     return [
       ...headers,
-      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Type: text/html; charset=UTF-8',
       'Content-Transfer-Encoding: 8bit',
       '',
       body || '',

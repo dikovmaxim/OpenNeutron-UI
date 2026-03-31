@@ -65,4 +65,17 @@
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.2);
   }
+
+  /* HTML email body rendering */
+  .email-html-body { font-size: 0.875rem; line-height: 1.6; }
+  .email-html-body p { margin: 0.25em 0; }
+  .email-html-body ul, .email-html-body ol { margin: 0.5em 0; padding-left: 1.5em; }
+  .email-html-body li { margin: 0.15em 0; }
+  .email-html-body a { color: var(--color-primary); text-decoration: underline; }
+  .email-html-body strong, .email-html-body b { font-weight: 600; }
+  .email-html-body em, .email-html-body i { font-style: italic; }
+  .email-html-body u { text-decoration: underline; }
+  .email-html-body s, .email-html-body del { text-decoration: line-through; }
+  .email-html-body blockquote { border-left: 2px solid rgba(229,231,235,0.2); padding-left: 0.75em; margin: 0.5em 0; opacity: 0.6; }
+  .email-html-body img { max-width: 100%; height: auto; }
 }

@@ -1,5 +1,29 @@
+import DOMPurify from 'dompurify'
 import { ExternalLink } from 'lucide-react'
-import { segmentLinks, stripHtml } from '@/emailParser'
+import { segmentLinks } from '@/emailParser'
+
+// Configure DOMPurify: strip scripts/styles/event-handlers, force all links to open in new tab
+const DOMPURIFY_CONFIG = {
+  FORBID_TAGS: ['script', 'style', 'link', 'meta', 'iframe', 'object', 'embed', 'form', 'input', 'button'],
+  FORBID_ATTR: ['action', 'formaction'],
+  ADD_ATTR: ['target', 'rel'],
+}
+
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank')
+    node.setAttribute('rel', 'noopener noreferrer')
+  }
+})
+
+function sanitizeHtml(html) {
+  return DOMPurify.sanitize(html, DOMPURIFY_CONFIG)
+}
+
+// Heuristic: treat textBody as HTML if it starts with an HTML tag
+function looksLikeHtml(text) {
+  return /^\s*<[a-zA-Z]/.test(text)
+}
 
 const ATTR_RE = /^On .{3,300} wrote:\s*$/
 
@@ -55,7 +79,20 @@ function TextWithLinks({ text }) {
 }
 
 export function EmailBody({ textBody, htmlBody }) {
-  const text = textBody || (htmlBody ? stripHtml(htmlBody) : '')
+  // Prefer explicit htmlBody; fall back to textBody that looks like HTML
+  const resolvedHtml = htmlBody || (textBody && looksLikeHtml(textBody) ? textBody : null)
+
+  if (resolvedHtml) {
+    return (
+      <div
+        className="email-html-body"
+        // eslint-disable-next-line react/no-danger
+        dangerouslySetInnerHTML={{ __html: sanitizeHtml(resolvedHtml) }}
+      />
+    )
+  }
+
+  const text = textBody || ''
   const blocks = parseBlocks(text)
 
   return (

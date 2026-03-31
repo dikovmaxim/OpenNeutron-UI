@@ -3,8 +3,9 @@ import { storage } from './storage'
 import { keySession } from './keySession'
 
 const api = axios.create({
-  baseURL: 'http://openneutron.com:8080',
-  //baseURL: 'http://localhost:8080',
+  //baseURL: 'http://openneutron.com:8080',
+  //baseURL: 'http://localhost:8080/api',
+  baseURL: '/api/',
   headers: {
     'Content-Type': 'application/json',
   },

@@ -52,11 +52,13 @@ export function useSendEmail({ myEmail, replyData, draftId, onDeleteDraft, onSen
 
       setSendState('fetchingkeys')
       const resolveRes = await api.post('/email/publickeys', { addresses: allRecipients }, { headers })
-      const keyMap = Object.fromEntries(resolveRes.data.keys.map((k) => [k.address, k.public_key]))
+      const keyMap = Object.fromEntries(
+        (resolveRes.data.keys ?? []).map((k) => [k.address.toLowerCase(), k.public_key])
+      )
 
       setSendState('encrypting')
 
-      const hasAnyKey = allRecipients.some((addr) => !!keyMap[addr])
+      const hasAnyKey = allRecipients.some((addr) => !!keyMap[addr.toLowerCase()])
 
       const rawEmail = buildEmail({
         from:        myEmail,
@@ -82,7 +84,7 @@ export function useSendEmail({ myEmail, replyData, draftId, onDeleteDraft, onSen
 
       const recipientsPayload = {}
       for (const addr of allRecipients) {
-        const recipientKeyB64 = keyMap[addr]
+        const recipientKeyB64 = keyMap[addr.toLowerCase()]
         if (recipientKeyB64) {
           const recipientKey = await importPublicKeyBase64(recipientKeyB64)
           const { aes_encrypted, data_encrypted } = await encryptEmail(rawEmail, recipientKey)

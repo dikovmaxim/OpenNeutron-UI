@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import api from '@/api'
 import { storage } from '@/storage'
-import { hashPassword, generateKeyPair, exportPublicKeyBase64, encryptPrivateKey, decryptPrivateKey } from '@/crypto'
+import { hashPassword, generateKeyPair, exportPublicKeyBase64, encryptPrivateKey, decryptPrivateKey, hasSubtleCrypto } from '@/crypto'
 import { keySession } from '@/keySession'
 import { Mail } from 'lucide-react'
 
@@ -197,9 +197,15 @@ const Login = () => {
                   {loading ? 'Generating keys…' : 'Setup Account & Login'}
                 </Button>
                 {loading && (
-                  <p className="text-xs text-foreground/50 text-center pt-1">
-                    Generating RSA-4096 key pair, this may take a moment…
-                  </p>
+                  hasSubtleCrypto ? (
+                    <p className="text-xs text-foreground/50 text-center pt-1">
+                      Generating RSA-4096 key pair, this may take a moment…
+                    </p>
+                  ) : (
+                    <p className="text-xs text-destructive text-center pt-1 font-medium">
+                      No SSL connection detected — using software fallback (this will be significantly slower)
+                    </p>
+                  )
                 )}
               </form>
             </CardContent>

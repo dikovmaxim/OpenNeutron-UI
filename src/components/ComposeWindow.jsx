@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { AddressField } from '@/components/compose/AddressField'
 import { AttachmentChip } from '@/components/compose/AttachmentChip'
+import { TiptapEditor } from '@/components/compose/TiptapEditor'
 import { useSendEmail } from '@/hooks/useSendEmail'
 import { useAttachments } from '@/hooks/useAttachments'
 import { useResizable } from '@/hooks/useResizable'
@@ -37,24 +38,24 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
 
   const { windowRef, size, handleResizeMouseDown } = useResizable()
 
-  const buildDraft = useCallback(() => ({
-    id:        currentDraftId.current,
-    to:        toChips,
-    cc:        ccChips,
-    bcc:       bccChips,
-    subject,
-    body,
-    updatedAt: Date.now(),
-  }), [toChips, ccChips, bccChips, subject, body])
+  const buildDraft = useCallback(() => {
+    const hasContent = toChips.length > 0 || subject.trim() || (body && body.replace(/<(.|\n)*?>/g, '').trim()) || attachments.length > 0
+    if (!hasContent) return null
+    return {
+      id:        currentDraftId.current,
+      to:        toChips,
+      cc:        ccChips,
+      bcc:       bccChips,
+      subject,
+      body,
+      updatedAt: Date.now(),
+    }
+  }, [toChips, ccChips, bccChips, subject, body, attachments])
 
   const handleClose = useCallback(() => {
-    const hasContent = toChips.length > 0 || subject.trim() || body.trim() || attachments.length > 0
-    if (hasContent && sendState !== 'done') {
-      onClose(buildDraft())
-    } else {
-      onClose(null)
-    }
-  }, [toChips, subject, body, attachments, sendState, buildDraft, onClose])
+    const draft = buildDraft()
+    onClose(draft)
+  }, [buildDraft, onClose])
 
   const handleDiscard = useCallback(() => {
     if (draftId) onDeleteDraft?.(draftId)
@@ -77,8 +78,8 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
   return (
     <div
       ref={windowRef}
-      className="fixed z-50 flex flex-col bg-background border border-border rounded-t-lg shadow-2xl"
-      style={{ bottom: 0, right: 24, width: minimized ? 280 : size.w, height: minimized ? 'auto' : size.h }}
+      className="fixed z-50 flex flex-col bg-card border border-border rounded-t-lg shadow-2xl"
+      style={{ bottom: 0, right: 24, width: minimized ? 320 : size.w, height: minimized ? 'auto' : size.h }}
     >
       {!minimized && (
         <>
@@ -92,28 +93,28 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
       )}
 
       {/* Title bar */}
-      <div className="flex items-center justify-between px-3 h-10 bg-accent/60 rounded-t-lg border-b border-border shrink-0 select-none">
-        <span className="text-sm font-medium text-foreground truncate">
+      <div className="flex items-center justify-between px-3 h-10 bg-muted/30 rounded-t-lg border-b border-border shrink-0 select-none">
+        <span className="text-sm font-medium text-card-foreground truncate">
           {subject || 'New Message'}
         </span>
         <div className="flex items-center gap-1 ml-2 shrink-0">
           <button
             onClick={() => setMinimized((v) => !v)}
-            className="p-1 rounded hover:bg-accent text-foreground/60 hover:text-foreground transition-colors"
+            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
             title={minimized ? 'Expand' : 'Minimize'}
           >
             {minimized ? <ChevronUp className="w-4 h-4" /> : <Minus className="w-4 h-4" />}
           </button>
           <button
             onClick={handleDiscard}
-            className="p-1 rounded hover:bg-destructive/20 text-foreground/60 hover:text-destructive transition-colors"
+            className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
             title="Discard draft"
           >
             <Trash2 className="w-4 h-4" />
           </button>
           <button
             onClick={handleClose}
-            className="p-1 rounded hover:bg-accent text-foreground/60 hover:text-foreground transition-colors"
+            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
             title="Save draft & close"
           >
             <X className="w-4 h-4" />
@@ -124,26 +125,27 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
       {!minimized && (
         <>
           {/* Address + subject fields */}
-          <div className="shrink-0">
-            <AddressField label="To"  chips={toChips}  onChipsChange={setToChips} />
-            <AddressField label="Cc"  chips={ccChips}  onChipsChange={setCcChips} />
-            <AddressField label="Bcc" chips={bccChips} onChipsChange={setBccChips} />
-
-            <div className="flex items-center border-b border-border/60 px-3">
-              <span className="text-xs text-foreground/40 w-14 shrink-0">Subject</span>
+          <div className="shrink-0 border-b border-border">
+            <div className="px-3 pt-3">
+              <AddressField label="To:" chips={toChips} onChipsChange={setToChips} />
+              <AddressField label="Cc:" chips={ccChips} onChipsChange={setCcChips} />
+              <AddressField label="Bcc:" chips={bccChips} onChipsChange={setBccChips} />
+            </div>
+            <div className="flex items-center px-6">
+              <span className="text-sm font-semibold text-muted-foreground w-14 shrink-0 py-1.5">Subject:</span>
               <input
                 type="text"
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
-                placeholder="Subject"
-                className="flex-1 py-1.5 bg-transparent outline-none text-sm text-foreground placeholder:text-foreground/30"
+                placeholder="My super secret subject"
+                className="flex-1 py-1.5 bg-transparent outline-none text-sm text-card-foreground placeholder:text-muted-foreground/60"
               />
             </div>
           </div>
 
           {/* Body + drag-and-drop */}
           <div
-            className="flex-1 flex flex-col relative min-h-0"
+            className="flex-1 flex flex-col relative min-h-0 bg-muted/20"
             onDragOver={(e)  => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true) }}
             onDragEnter={(e) => { e.preventDefault(); setIsDragOver(true) }}
             onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsDragOver(false) }}
@@ -155,22 +157,21 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
             }}
           >
             {isDragOver && (
-              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-primary/10 border-2 border-dashed border-primary/50 rounded pointer-events-none">
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-primary/10 border-2 border-dashed border-primary/50 rounded-lg pointer-events-none">
                 <Paperclip className="w-8 h-8 text-primary/70" />
                 <span className="text-sm font-medium text-primary/80">Drop files to attach</span>
                 <span className="text-xs text-primary/60">Max 20 MB per file</span>
               </div>
             )}
 
-            <textarea
+            <TiptapEditor
               value={body}
-              onChange={(e) => setBody(e.target.value)}
+              onChange={setBody}
               placeholder="Write your message… (or drag & drop files to attach)"
-              className="flex-1 resize-none bg-transparent p-3 text-sm text-foreground placeholder:text-foreground/30 outline-none leading-relaxed min-h-0"
             />
 
             {attachments.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 px-3 py-2 border-t border-border/40">
+              <div className="flex flex-wrap gap-1.5 px-3 py-2 border-t border-border/60 shrink-0">
                 {attachments.map((att) => (
                   <AttachmentChip key={att.id} att={att} onRemove={() => removeAttachment(att.id)} />
                 ))}
@@ -182,13 +183,13 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
           <div className="shrink-0 px-3 py-2 border-t border-border flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
               {hasLoadingFiles && !isSending && (
-                <span className="flex items-center gap-1.5 text-xs text-foreground/50 shrink-0">
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   Reading files…
                 </span>
               )}
               {isSending && (
-                <span className="flex items-center gap-1.5 text-xs text-foreground/50">
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Loader2 className="w-3.5 h-3.5 animate-spin" /> {sendStatusLabel}
                 </span>
               )}
@@ -234,7 +235,7 @@ const ComposeWindow = ({ myEmail, onClose, onSent, replyData = null, draftId = n
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isSendBlocked}
-                className="p-1.5 rounded text-foreground/50 hover:text-foreground hover:bg-accent transition-colors disabled:opacity-40"
+                className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
                 title="Attach files (max 20 MB each)"
               >
                 <Paperclip className="w-4 h-4" />
